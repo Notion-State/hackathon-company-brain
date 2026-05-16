@@ -19,6 +19,7 @@ All ingest, analysis, and delivery runs on **Notion Workers** so it stays inside
 | Component | Status | Notes |
 |---|---|---|
 | `workers/ingest-fireflies` | **Building now** | Pulls meeting transcripts from Fireflies.AI into a managed Notion DB `Meeting Transcripts`. Backfill + delta syncs. Multi-account ready (one Fireflies API key in v1; abstractions handle N keys). |
+| `workers/ingest-client-notion` | **Building now** | Pulls feature-request pages from one or more *client* Notion workspaces into a managed Notion DB `Client Feature Requests`. Per-client internal integration tokens. Backfill + delta syncs, composite key `${clientId}:${pageId}`. Page bodies rendered to markdown (depth 2, 50 KB cap). |
 | `REQUIREMENTS.md`, `SCHEMA.md` | **Building now** | Living docs per `CLAUDE.md`. |
 
 ## Planned (next iterations, not built yet)
@@ -52,3 +53,4 @@ All ingest, analysis, and delivery runs on **Notion Workers** so it stays inside
 - Multi-tenant access to the **same** Fireflies meeting (two API keys with overlapping access) → v1 stores per-account rows keyed by `${accountId}:${transcriptId}`, accepting the duplication. Dedup can happen downstream in the categorizer if needed.
 - Reverse sync semantics from client workspace → TBD.
 - Whether agent-generated pages live in the same DB as ingest data or a separate `Review Queue` DB → separate (planned).
+- Per-client source-schema drift detection in `workers/ingest-client-notion` (alert when a client's Feature Requests DB lacks a canonical property) → deferred. v1 degrades silently with typed fallbacks; a future preflight could call `databases.retrieve` once per backfill and warn on missing canonical properties.
