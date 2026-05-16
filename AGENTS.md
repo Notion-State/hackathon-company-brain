@@ -23,6 +23,8 @@ Code in this repo must be **effective, accurate, maintainable, performant, secur
 
 **When in doubt, ask.** Clarifying questions are cheaper than rework. Surface ambiguity early rather than guessing.
 
+**Do not use `as any` (or `as never`, `as unknown as ...`) to silence Notion SDK types.** The SDK's types compile when the call is shaped correctly — a TypeScript error means the call shape is wrong, not that the type is too strict. Fix the call (right property keys, right Builder helpers, right value shapes) instead of casting around it. Casts hide real runtime bugs the SDK is trying to prevent.
+
 ---
 
 ## Repository structure
