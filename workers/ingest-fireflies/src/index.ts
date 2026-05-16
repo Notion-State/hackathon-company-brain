@@ -64,7 +64,12 @@ const perAccount: Record<string, PerAccount> = Object.fromEntries(
 
 // ---- Database ----
 
-const transcriptsDb = worker.database("transcripts", {
+// Note: `transcripts-v2` (not `transcripts`) so the workers runtime provisions
+// a fresh managed database. The original `transcripts` DB ended up with stale
+// archived rows the framework kept resolving to (writes succeeded but were
+// invisible in the UI). Reset wasn't enough to break the binding. The old DB
+// stays orphaned in the workspace; archive it manually once this is healthy.
+const transcriptsDb = worker.database("transcripts-v2", {
 	type: "managed",
 	initialTitle: "Meeting Transcripts",
 	primaryKeyProperty: "Record ID",
