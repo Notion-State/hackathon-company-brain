@@ -94,15 +94,19 @@ describe("getCompaniesLookup", () => {
 	});
 
 	it("returns null lookups when the API call throws (resilient)", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		const stub: StubClient = {
 			databases: { retrieve: vi.fn(async () => ({ data_sources: [{ id: "ds-x" }] })) },
 			dataSources: { query: vi.fn(async () => { throw new Error("boom"); }) },
 		};
 		const lookup = await getCompaniesLookup({ notion: stub as never, companiesDatabaseId: "x" });
 		expect(lookup.companyNameByDomain("anything.com")).toBeNull();
+		expect(warn).toHaveBeenCalledOnce();
+		warn.mockRestore();
 	});
 
 	it("returns null lookups when databases.retrieve fails", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		const stub: StubClient = {
 			databases: { retrieve: vi.fn(async () => { throw new Error("not found"); }) },
 			dataSources: { query: vi.fn() },
@@ -110,6 +114,8 @@ describe("getCompaniesLookup", () => {
 		const lookup = await getCompaniesLookup({ notion: stub as never, companiesDatabaseId: "x" });
 		expect(lookup.companyNameByDomain("anything.com")).toBeNull();
 		expect(stub.dataSources.query).not.toHaveBeenCalled();
+		expect(warn).toHaveBeenCalledOnce();
+		warn.mockRestore();
 	});
 
 	it("caches the load (second call doesn't re-query)", async () => {
