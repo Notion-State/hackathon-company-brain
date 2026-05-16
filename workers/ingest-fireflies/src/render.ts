@@ -29,9 +29,11 @@ function escapeMarkdown(input: string): string {
 		.replace(/#/g, "\\#");
 }
 
-function durationMinutes(durationSeconds: number | null | undefined): number | null {
-	if (durationSeconds == null || Number.isNaN(durationSeconds)) return null;
-	return Math.max(0, Math.round(durationSeconds / 60));
+function durationMinutes(rawMinutes: number | null | undefined): number | null {
+	// Fireflies returns `duration` as float minutes (verified empirically; the
+	// public docs say seconds but actual responses are minutes).
+	if (rawMinutes == null || Number.isNaN(rawMinutes)) return null;
+	return Math.max(0, Math.round(rawMinutes));
 }
 
 function attendeeNames(t: Transcript): string[] {
@@ -148,13 +150,17 @@ export function toChangeProperties(t: Transcript, accountId: string, now: Date =
 	const attendees = attendeeNames(t);
 	const hostEmail = t.host_email?.trim();
 	const validHostEmail = hostEmail && /.+@.+\..+/.test(hostEmail) ? hostEmail : "";
+	// Defense in depth: the client normalizes Fireflies' epoch-ms `date` to ISO,
+	// but if any non-string slips through, fall back to `now` so Builder.dateTime
+	// never sees a number it'd reject.
+	const meetingDateIso = typeof t.date === "string" && t.date.length > 0 ? t.date : now.toISOString();
 
 	return {
 		Title: Builder.title(title),
 		"Record ID": Builder.richText(composite),
 		"Transcript ID": Builder.richText(t.id),
 		Account: Builder.select(accountId),
-		"Meeting Date": Builder.dateTime(t.date ?? now.toISOString()),
+		"Meeting Date": Builder.dateTime(meetingDateIso),
 		"Duration (min)": Builder.number(mins ?? 0),
 		Host: Builder.email(validHostEmail),
 		Attendees: Builder.richText(attendees.join(", ")),

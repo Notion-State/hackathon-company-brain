@@ -45,9 +45,10 @@ const perAccount: Record<string, PerAccount> = Object.fromEntries(
 	accounts.map((a) => [
 		a.id,
 		{
-			// Fireflies rate-limits per API key (60/min on Business). 50/min gives
-			// safety margin. One pacer per account so accounts don't share budget.
-			pacer: worker.pacer(`fireflies:${a.id}`, { allowedRequests: 50, intervalMs: 60_000 }),
+			// Fireflies rate-limits per API key on a rolling window (60/min on
+			// Business). 30/min gives generous margin since the pacer dispenses
+			// budget on a per-cycle basis but Fireflies counts across cycles.
+			pacer: worker.pacer(`fireflies:${a.id}`, { allowedRequests: 30, intervalMs: 60_000 }),
 			client: createFirefliesClient(a.apiKey),
 		},
 	]),
@@ -155,24 +156,19 @@ async function fetchAllDetails(
 	pacer: ReturnType<typeof worker.pacer>,
 	ids: string[],
 ): Promise<Transcript[]> {
-	// allSettled (not all): one failing detail fetch shouldn't discard the
-	// other 49 successful ones — that wastes pacer budget and leaves the
-	// next cycle to retry the whole page. Log failures so they surface in
-	// `ntn workers runs logs`; the page's primary keys will reappear on the
-	// next cycle and we'll try again.
-	const results = await Promise.allSettled(
-		ids.map(async (id) => {
-			await pacer.wait();
-			return client.getTranscript(id);
-		}),
-	);
+	// Sequential (not Promise.all): the pacer's per-call wait spreads requests
+	// over the interval, but with concurrent calls the pacer dispenses budget
+	// in a burst at the start of each minute and Fireflies' rolling rate-limit
+	// trips. Sequential calls give the pacer time to enforce real spacing.
+	// Per-id try/catch preserves the partial-success behavior of allSettled:
+	// one failing fetch doesn't discard its page-mates.
 	const transcripts: Transcript[] = [];
-	for (let i = 0; i < results.length; i++) {
-		const r = results[i]!;
-		if (r.status === "fulfilled") {
-			transcripts.push(r.value);
-		} else {
-			console.warn(`fireflies: getTranscript failed for id=${ids[i]}:`, r.reason);
+	for (const id of ids) {
+		try {
+			await pacer.wait();
+			transcripts.push(await client.getTranscript(id));
+		} catch (e) {
+			console.warn(`fireflies: getTranscript failed for id=${id}:`, e);
 		}
 	}
 	return transcripts;

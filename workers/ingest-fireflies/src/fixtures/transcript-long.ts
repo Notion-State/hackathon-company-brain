@@ -24,7 +24,7 @@ export const transcriptLong: Transcript = {
 	id: "ff_long_002",
 	title: "Q2 planning — engineering leads",
 	date: "2026-04-22T13:30:00.000Z",
-	duration: 5400, // 90 minutes
+	duration: 90, // minutes
 	host_email: "alice@acme.com",
 	transcript_url: "https://app.fireflies.ai/view/ff_long_002",
 	meeting_attendees: [
@@ -33,7 +33,7 @@ export const transcriptLong: Transcript = {
 		{ displayName: "Carol", email: "carol@acme.com", location: null },
 		{ displayName: "Dave", email: "dave@acme.com", location: null },
 	],
-	speakers: SPEAKERS.map((name, i) => ({ name, speaker_id: i + 1 })),
+	speakers: SPEAKERS.map((name) => ({ name })),
 	sentences: buildSentences(200),
 	summary: {
 		// Use a string with markdown-style bullets to exercise the string-form

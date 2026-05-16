@@ -16,7 +16,6 @@ export type Sentence = {
 
 export type Speaker = {
 	name: string | null;
-	speaker_id: number | null;
 };
 
 export type MeetingAttendee = {
@@ -36,8 +35,8 @@ export type TranscriptSummary = {
 export type Transcript = {
 	id: string;
 	title: string | null;
-	date: string | null; // ISO datetime
-	duration: number | null; // seconds (per docs)
+	date: string | null; // ISO 8601 datetime, normalized from epoch-millis at the client boundary
+	duration: number | null; // minutes (Fireflies returns float minutes, not seconds as the public docs imply)
 	host_email: string | null;
 	transcript_url: string | null;
 	meeting_attendees: MeetingAttendee[] | null;
@@ -45,6 +44,18 @@ export type Transcript = {
 	sentences: Sentence[] | null;
 	summary: TranscriptSummary | null;
 };
+
+/**
+ * Fireflies returns `date` fields as Unix epoch milliseconds (number), but the
+ * Notion `Builder.dateTime` expects ISO 8601. Normalize at the client boundary
+ * so all downstream code treats dates uniformly as ISO strings.
+ */
+function normalizeDate(raw: unknown): string | null {
+	if (raw == null) return null;
+	if (typeof raw === "string") return raw;
+	if (typeof raw === "number" && Number.isFinite(raw)) return new Date(raw).toISOString();
+	return null;
+}
 
 export type ListTranscriptsArgs = {
 	fromIso: string; // ISO datetime — Fireflies accepts ISO and date-only
@@ -100,7 +111,6 @@ const TRANSCRIPT_QUERY = /* GraphQL */ `
 			}
 			speakers {
 				name
-				speaker_id
 			}
 			sentences {
 				speaker_name
@@ -154,9 +164,14 @@ export function createFirefliesClient(
 
 		const payload = (await res.json()) as { data?: T; errors?: unknown };
 		if (payload.errors) {
+			// Fireflies sometimes returns rate-limit errors as HTTP 200 with a
+			// GraphQL error of code "too_many_requests". Classify as retryable
+			// so logs/reviewers can distinguish from genuine query bugs.
+			const isRateLimit = Array.isArray(payload.errors)
+				&& payload.errors.some((e) => (e as { code?: string })?.code === "too_many_requests");
 			throw new FirefliesError(`Fireflies GraphQL error: ${JSON.stringify(payload.errors).slice(0, 500)}`, {
 				status: res.status,
-				retryable: false,
+				retryable: isRateLimit,
 				graphqlErrors: payload.errors,
 			});
 		}
@@ -168,7 +183,7 @@ export function createFirefliesClient(
 
 	return {
 		async listTranscriptIds({ fromIso, skip, limit }) {
-			const data = await gql<{ transcripts: Array<{ id: string; date: string | null }> }>(LIST_QUERY, {
+			const data = await gql<{ transcripts: Array<{ id: string; date: unknown }> }>(LIST_QUERY, {
 				fromDate: fromIso,
 				skip,
 				limit,
@@ -176,8 +191,9 @@ export function createFirefliesClient(
 			const items = data.transcripts ?? [];
 			let latestDate: string | null = null;
 			for (const item of items) {
-				if (item.date && (latestDate === null || item.date > latestDate)) {
-					latestDate = item.date;
+				const iso = normalizeDate(item.date);
+				if (iso && (latestDate === null || iso > latestDate)) {
+					latestDate = iso;
 				}
 			}
 			return {
@@ -188,14 +204,17 @@ export function createFirefliesClient(
 		},
 
 		async getTranscript(id) {
-			const data = await gql<{ transcript: Transcript }>(TRANSCRIPT_QUERY, { id });
+			const data = await gql<{ transcript: (Omit<Transcript, "date"> & { date: unknown }) | null }>(
+				TRANSCRIPT_QUERY,
+				{ id },
+			);
 			if (!data.transcript) {
 				throw new FirefliesError(`Fireflies returned null transcript for id=${id}`, {
 					status: 200,
 					retryable: false,
 				});
 			}
-			return data.transcript;
+			return { ...data.transcript, date: normalizeDate(data.transcript.date) };
 		},
 	};
 }

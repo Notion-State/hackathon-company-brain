@@ -17,7 +17,7 @@ All properties are emitted on every change record (the SDK's strict mapped type 
 | `Transcript ID` | rich_text | no | Bare Fireflies transcript id. Groups the same meeting across accounts. |
 | `Account` | select | no | Fireflies account id (the `<ID>` half of `FIREFLIES_API_KEY_<ID>`, or `"default"` for the unsuffixed key). Options declared at worker init from the configured accounts. |
 | `Meeting Date` | date (datetime) | yes | `transcript.date`. Fallback: sync run timestamp (Fireflies transcripts should always carry a date in practice). |
-| `Duration (min)` | number | yes | `Math.round(transcript.duration / 60)`. Source `duration` is seconds. Fallback: `0`. |
+| `Duration (min)` | number | yes | `Math.round(transcript.duration)`. Fireflies returns `duration` as **float minutes** (verified empirically — public docs say seconds but the API disagrees). Fallback: `0`. |
 | `Host` | email | yes | `transcript.host_email` (regex-validated). Fallback: empty string. |
 | `Attendees` | rich_text | yes | `meeting_attendees[].displayName` joined `", "`. Fallback: empty string. |
 | `Speakers` | rich_text | yes | `speakers[].name` deduped, joined `", "`. Fallback: empty string. (Stored as text rather than multi_select so the schema doesn't need every possible speaker pre-declared at module-init.) |
