@@ -150,6 +150,34 @@ Page-body rendering supports `paragraph`, `heading_1/2/3`, `bulleted_list_item`,
 
 See `workers/ingest-client-notion/README.md` for the five-step onboarding runbook (create internal integration → share DB → conform schema → send token+dbId → operator wires `ntn workers env set`).
 
+### `Company Brain Inbox` (client-managed; **contract**, not a managed database)
+
+The destination database in a client's Notion workspace. **We do not manage this database** — the client clones it from our published contract into their own workspace and shares it with the internal integration we configure in `workers/push-to-client`. The `pushToClient` tool reads the schema via `databases.retrieve` (preflight) and writes one page per call via `pages.create` against the resolved data source.
+
+Required properties must exist with the listed type or `pushToClient` throws `DestinationSchemaMismatch` before any write. Optional properties are written when present and silently skipped when absent.
+
+| Property | Type | Required | Notes |
+|---|---|---|---|
+| `Title` | title | yes | From `payload.title`. The human reviewer is expected to have proofread it. |
+| `Brain ID` | rich_text | yes | **Idempotency key.** The categorizer's Review Queue page id. `pushToClient` queries `Brain ID == payload.brainId` before every push; a hit returns `status: "already_pushed"` and no new page is created. Manual entries in the destination must not reuse this property — pre-existing duplicates are not deduped retroactively. |
+| `Source` | select | yes | Options the client must declare: `Fireflies`, `Slack`, `Loom`, `Other`. |
+| `Category` | select | yes | Options align with the categorizer taxonomy (TBD; canonical list will live in this section once the categorizer ships). Push-time validation: `pushToClient` reads `Category.select.options` at preflight and rejects unknown categories with `DestinationSchemaMismatch` carrying `validCategories`. |
+| `Original Date` | date | no | ISO 8601 datetime of the source event. |
+| `Origin URL` | url | no | Permalink to the source (Fireflies meeting, Slack permalink, Loom video). |
+| `Pushed At` | date | yes | Set by `pushToClient` to the ISO timestamp at create. |
+
+#### Page body
+
+Constructed by `pushToClient` from `payload.bodyMarkdown` via a documented Markdown subset (paragraphs, `#`/`##`/`###` headings, `-`/`1.` lists, fenced code blocks ` ``` `, `>` quotes, `---` dividers, inline `**bold**` / `*italic*` / `` `code` `` / `[text](url)`). Unsupported syntax is dropped with a warning surfaced in the tool result. Body is bounded at 50 KB; per-block rich-text runs are split at Notion's 2000-character limit; the `pages.create` 100-child cap is handled with chunked `blocks.children.append`.
+
+#### Sync sources
+
+None. The Inbox is a write-only destination — `pushToClient` creates one page per tool invocation against a data source the client owns. No managed sync writes here.
+
+#### Client onboarding
+
+See `workers/push-to-client/README.md` for the five-step onboarding checklist the client follows to create the internal integration, clone the Inbox template, and grant access.
+
 ## Adding a new database
 
 When you add a managed Notion database in a worker, append a section to this file with:

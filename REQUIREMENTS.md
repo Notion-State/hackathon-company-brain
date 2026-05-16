@@ -19,6 +19,7 @@ All ingest, analysis, and delivery runs on **Notion Workers** so it stays inside
 | Component | Status | Notes |
 |---|---|---|
 | `workers/ingest-fireflies` | **Building now** | Pulls meeting transcripts from Fireflies.AI into a managed Notion DB `Meeting Transcripts`. Backfill + delta syncs. Multi-account ready (one Fireflies API key in v1; abstractions handle N keys). |
+| `workers/push-to-client` | **Building now** | Exposes a `pushToClient` worker tool that creates a single page in a client's external Notion workspace from an inline payload. Per-client internal-integration tokens (one `ntn_...` per client, scoped to a destination DB the client shares with the integration); no OAuth in MVP. Idempotent via destination-side `Brain ID` rich_text query (no state in our workspace). Push-once-read-only: a second push for the same `brainId` returns `already_pushed` without writing. Per-client `staging`/`production` mode; production pushes additionally require `allowProduction: true` on the tool call. `worker.tool` only in MVP — `worker.automation` is private alpha and will mirror the same internal helper once GA. |
 | `workers/ingest-client-notion` | **Building now** | Pulls feature-request pages from one or more *client* Notion workspaces into a managed Notion DB `Client Feature Requests`. Per-client internal integration tokens. Backfill + delta syncs, composite key `${clientId}:${pageId}`. Page bodies rendered to markdown (depth 2, 50 KB cap). |
 | `REQUIREMENTS.md`, `SCHEMA.md` | **Building now** | Living docs per `CLAUDE.md`. |
 
@@ -26,9 +27,8 @@ All ingest, analysis, and delivery runs on **Notion Workers** so it stays inside
 
 - `workers/ingest-slack` — sync canonical Slack channels into a `Slack Messages` DB.
 - `workers/ingest-loom` — sync Loom video metadata + transcripts.
-- `workers/agent-categorizer` — read from the ingest DBs, classify items (topic, customer, action-required), write to a shared `Review Queue` DB.
+- `workers/agent-categorizer` — read from the ingest DBs, classify items (topic, customer, action-required), write to a shared `Review Queue` DB. Calls `workers/push-to-client` for approved rows.
 - `workers/agent-summarizer` — produce digest pages from clusters of categorized items.
-- `workers/push-to-client` — push approved Review Queue items into the client's Notion workspace. Holds the most sensitive integration token in the project; default target = staging.
 - Webhook-driven ingest (e.g., Fireflies "Transcription completed") to replace polling.
 - Reverse sync from the client workspace (TBD).
 
@@ -53,4 +53,6 @@ All ingest, analysis, and delivery runs on **Notion Workers** so it stays inside
 - Multi-tenant access to the **same** Fireflies meeting (two API keys with overlapping access) → v1 stores per-account rows keyed by `${accountId}:${transcriptId}`, accepting the duplication. Dedup can happen downstream in the categorizer if needed.
 - Reverse sync semantics from client workspace → TBD.
 - Whether agent-generated pages live in the same DB as ingest data or a separate `Review Queue` DB → separate (planned).
+- `workers/push-to-client` automation trigger → deferred until `worker.automation` is GA; same internal helper will sit behind the automation when available.
+- `workers/push-to-client` update flow for previously-pushed pages → TBD. MVP is push-once-read-only; correcting or re-pushing a page is not supported.
 - Per-client source-schema drift detection in `workers/ingest-client-notion` (alert when a client's Feature Requests DB lacks a canonical property) → deferred. v1 degrades silently with typed fallbacks; a future preflight could call `databases.retrieve` once per backfill and warn on missing canonical properties.
