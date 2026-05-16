@@ -19,6 +19,7 @@ function makeApi(opts: { queryResponse?: unknown; throws?: unknown }) {
 	const dbRetrieve = vi.fn<NotionSdkSubset["databases"]["retrieve"]>(async () => ({}));
 	const pagesCreate = vi.fn<NotionSdkSubset["pages"]["create"]>(async () => ({}));
 	const blocksAppend = vi.fn<NotionSdkSubset["blocks"]["children"]["append"]>(async () => ({}));
+	const usersList = vi.fn<NotionSdkSubset["users"]["list"]>(async () => ({ results: [] }));
 	const pacerWait = vi.fn<() => Promise<void>>(async () => undefined);
 
 	const sdk: NotionSdkSubset = {
@@ -26,13 +27,24 @@ function makeApi(opts: { queryResponse?: unknown; throws?: unknown }) {
 		dataSources: { retrieve: dsRetrieve, query: dsQuery },
 		pages: { create: pagesCreate },
 		blocks: { children: { append: blocksAppend } },
+		users: { list: usersList },
 	};
+	let cached: Promise<Map<string, string>> | null = null;
 	const api: ClientApi = {
 		id: "acme",
-		destDbId: "db_acme",
+		destDbIdsByType: { Docs: "db_docs", StatusUpdate: "db_status", Deliverable: "db_deliv" },
 		mode: "staging",
 		waitForPacer: pacerWait,
 		sdk,
+		usersByEmail: {
+			get: () => {
+				if (!cached) cached = Promise.resolve(new Map());
+				return cached;
+			},
+			reset: () => {
+				cached = null;
+			},
+		},
 	};
 	return { api, dsQuery, pacerWait };
 }

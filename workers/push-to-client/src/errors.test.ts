@@ -6,6 +6,7 @@ import {
 	DestinationSchemaMismatch,
 	IntegrationRevoked,
 	MarkdownTooLong,
+	MissingRequiredField,
 	ProductionPushNotAuthorized,
 	PushToClientError,
 	RateLimited,
@@ -32,21 +33,25 @@ describe("PushToClientError subclasses", () => {
 		expect(e.toJSON().details).toEqual({ clientId: "acme" });
 	});
 
-	it("DestinationSchemaMismatch formats missing + wrongType + unknownCategory", () => {
+	it("DestinationSchemaMismatch formats missing + wrongType + unknownStatus + unknownType", () => {
 		const e = new DestinationSchemaMismatch({
 			missing: ["Brain ID"],
 			wrongType: [{ name: "Title", expected: "title", actual: "rich_text" }],
-			unknownCategory: "foo",
-			validCategories: ["a", "b"],
+			unknownStatus: "Foo",
+			validStatuses: ["Drafting", "Published"],
+			unknownType: "Bar",
+			validTypes: ["Contract", "Brand"],
 		});
 		expect(e.code).toBe("DESTINATION_SCHEMA_MISMATCH");
 		expect(e.message).toContain("missing properties: Brain ID");
 		expect(e.message).toContain("Title (expected title, got rich_text)");
-		expect(e.message).toContain('unknown category "foo"');
-		expect(e.message).toContain("valid: a, b");
+		expect(e.message).toContain('unknown status "Foo"');
+		expect(e.message).toContain("valid: Drafting, Published");
+		expect(e.message).toContain('unknown type "Bar"');
 		expect(e.toJSON().details).toMatchObject({
 			missing: ["Brain ID"],
-			unknownCategory: "foo",
+			unknownStatus: "Foo",
+			unknownType: "Bar",
 		});
 	});
 
@@ -57,6 +62,15 @@ describe("PushToClientError subclasses", () => {
 			hint: "DB must contain exactly one data source",
 		});
 		expect(e.message).toContain("DB must contain exactly one data source");
+	});
+
+	it("MissingRequiredField carries docType + field", () => {
+		const e = new MissingRequiredField("Docs", "type");
+		expect(e.code).toBe("MISSING_REQUIRED_FIELD");
+		expect(e.name).toBe("MissingRequiredField");
+		expect(e.message).toContain("Docs");
+		expect(e.message).toContain("type");
+		expect(e.toJSON().details).toEqual({ docType: "Docs", field: "type" });
 	});
 
 	it("MarkdownTooLong reports counts", () => {

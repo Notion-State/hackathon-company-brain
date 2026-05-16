@@ -6,8 +6,10 @@ import type {
 	QueryDataSourceParameters,
 } from "@notionhq/client/build/src/api-endpoints/data-sources.js";
 import type { CreatePageParameters } from "@notionhq/client/build/src/api-endpoints/pages.js";
+import type { ListUsersParameters } from "@notionhq/client/build/src/api-endpoints/users.js";
 
 import type { ClientConfig, ClientMode } from "./clients.js";
+import type { DocType } from "./doc-types.js";
 
 /**
  * Narrow subset of `@notionhq/client`'s `Client` covering only the endpoints
@@ -35,29 +37,63 @@ export type NotionSdkSubset = {
 			append: (args: AppendBlockChildrenParameters) => Promise<unknown>;
 		};
 	};
+	users: {
+		list: (args: ListUsersParameters) => Promise<unknown>;
+	};
 };
 
 /**
- * Bundles a per-client Notion SDK handle, a pacer, and the resolved client
- * config. Every call site must `await api.waitForPacer()` before invoking
- * `api.sdk.*`.
+ * Bundles a per-client Notion SDK handle, a pacer, the resolved client config,
+ * and a lazy email→user-id index. Every call site must `await api.waitForPacer()`
+ * before invoking `api.sdk.*`.
  */
 export type ClientApi = {
 	id: string;
-	destDbId: string;
+	destDbIdsByType: Record<DocType, string>;
 	mode: ClientMode;
 	waitForPacer: () => Promise<void>;
 	sdk: NotionSdkSubset;
+	/** Lazy email→Notion user id map, populated on first read by `people.ts`. */
+	usersByEmail: { get: () => Promise<Map<string, string>>; reset: () => void };
 };
 
 export type PacerLike = { wait: () => Promise<void> };
 
-export function createClientApi(cfg: ClientConfig, pacer: PacerLike): ClientApi {
-	return {
+/** Lazy loader for the email→user-id map. Defined here as a type so the factory and tests can both implement it. */
+export type UsersByEmailLoader = (api: ClientApi) => Promise<Map<string, string>>;
+
+export function createClientApi(
+	cfg: ClientConfig,
+	pacer: PacerLike,
+	loadUsersByEmail: UsersByEmailLoader,
+): ClientApi {
+	const sdk: NotionSdkSubset = new Client({ auth: cfg.token });
+	const api: ClientApi = {
 		id: cfg.id,
-		destDbId: cfg.destDbId,
+		destDbIdsByType: cfg.destDbIdsByType,
 		mode: cfg.mode,
 		waitForPacer: () => pacer.wait(),
-		sdk: new Client({ auth: cfg.token }),
+		sdk,
+		usersByEmail: lazyMap(() => loadUsersByEmail(api)),
+	};
+	return api;
+}
+
+/**
+ * Single-flight lazy cache for an async-loaded `Map<string, string>`. Used for
+ * the email→user-id resolver; exported so tests can build their own.
+ */
+export function lazyMap(
+	load: () => Promise<Map<string, string>>,
+): ClientApi["usersByEmail"] {
+	let cached: Promise<Map<string, string>> | null = null;
+	return {
+		get: () => {
+			if (!cached) cached = load();
+			return cached;
+		},
+		reset: () => {
+			cached = null;
+		},
 	};
 }

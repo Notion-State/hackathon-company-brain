@@ -1,6 +1,7 @@
 import { APIErrorCode } from "@notionhq/client";
 import { describe, expect, it, vi } from "vitest";
 
+import type { DocType } from "./doc-types.js";
 import { DestinationSchemaMismatch, IntegrationRevoked } from "./errors.js";
 import { makeApiError } from "./fixtures/notion-error.js";
 import type { ClientApi, NotionSdkSubset } from "./notion-client.js";
@@ -12,25 +13,31 @@ type Calls = {
 	pacerWait: ReturnType<typeof vi.fn<() => Promise<void>>>;
 };
 
+const DOCS_DB = "db_docs";
+const STATUS_DB = "db_status";
+const DELIV_DB = "db_deliv";
+
 function makeApi(
 	overrides: {
 		dbResponse?: unknown;
-		dsResponse?: unknown;
+		dsResponses?: Partial<Record<string, unknown>>; // keyed by data source id
 		dbThrows?: unknown;
 		dsThrows?: unknown;
 	} = {},
 ): { api: ClientApi; calls: Calls } {
-	const dbRetrieve = vi.fn<NotionSdkSubset["databases"]["retrieve"]>(async () => {
+	const dbRetrieve = vi.fn<NotionSdkSubset["databases"]["retrieve"]>(async (args) => {
 		if (overrides.dbThrows) throw overrides.dbThrows;
-		return overrides.dbResponse ?? defaultDbResponse();
+		return overrides.dbResponse ?? defaultDbResponseFor(args.database_id);
 	});
-	const dsRetrieve = vi.fn<NotionSdkSubset["dataSources"]["retrieve"]>(async () => {
+	const dsRetrieve = vi.fn<NotionSdkSubset["dataSources"]["retrieve"]>(async (args) => {
 		if (overrides.dsThrows) throw overrides.dsThrows;
-		return overrides.dsResponse ?? defaultDsResponse();
+		const stub = overrides.dsResponses?.[args.data_source_id];
+		return stub ?? defaultDsResponseFor(args.data_source_id);
 	});
 	const dsQuery = vi.fn<NotionSdkSubset["dataSources"]["query"]>(async () => ({ results: [] }));
 	const pagesCreate = vi.fn<NotionSdkSubset["pages"]["create"]>(async () => ({}));
 	const blocksAppend = vi.fn<NotionSdkSubset["blocks"]["children"]["append"]>(async () => ({}));
+	const usersList = vi.fn<NotionSdkSubset["users"]["list"]>(async () => ({ results: [] }));
 	const pacerWait = vi.fn<() => Promise<void>>(async () => undefined);
 
 	const sdk: NotionSdkSubset = {
@@ -38,162 +45,261 @@ function makeApi(
 		dataSources: { retrieve: dsRetrieve, query: dsQuery },
 		pages: { create: pagesCreate },
 		blocks: { children: { append: blocksAppend } },
+		users: { list: usersList },
 	};
+	let cached: Promise<Map<string, string>> | null = null;
 	const api: ClientApi = {
 		id: "acme",
-		destDbId: "db_acme",
+		destDbIdsByType: {
+			Docs: DOCS_DB,
+			StatusUpdate: STATUS_DB,
+			Deliverable: DELIV_DB,
+		},
 		mode: "staging",
 		waitForPacer: pacerWait,
 		sdk,
+		usersByEmail: {
+			get: () => {
+				if (!cached) cached = Promise.resolve(new Map());
+				return cached;
+			},
+			reset: () => {
+				cached = null;
+			},
+		},
 	};
 	return { api, calls: { dbRetrieve, dsRetrieve, pacerWait } };
 }
 
-function defaultDbResponse() {
+function defaultDbResponseFor(dbId: string) {
 	return {
 		object: "database",
-		id: "db_acme",
-		data_sources: [{ id: "ds_acme", name: "Inbox" }],
+		id: dbId,
+		data_sources: [{ id: `${dbId}_ds`, name: "Default" }],
 	};
 }
 
-function defaultDsResponse() {
-	return {
-		object: "data_source",
-		id: "ds_acme",
-		properties: {
-			Title: { type: "title" },
-			"Brain ID": { type: "rich_text" },
-			Source: { type: "select" },
-			Category: {
-				type: "select",
-				select: {
-					options: [{ name: "summary" }, { name: "action-items" }],
+function defaultDsResponseFor(dsId: string) {
+	if (dsId === `${DOCS_DB}_ds`) {
+		return {
+			object: "data_source",
+			id: dsId,
+			properties: {
+				"File Name": { type: "title" },
+				"Brain ID": { type: "rich_text" },
+				Status: {
+					type: "status",
+					status: {
+						options: [
+							{ name: "Drafting" },
+							{ name: "In Review" },
+							{ name: "Published" },
+							{ name: "Archived" },
+						],
+					},
+				},
+				Type: {
+					type: "select",
+					select: {
+						options: [
+							{ name: "Contract" },
+							{ name: "Brand" },
+							{ name: "Framework" },
+						],
+					},
 				},
 			},
-			"Pushed At": { type: "date" },
-			"Original Date": { type: "date" },
-			"Origin URL": { type: "url" },
-		},
-	};
+		};
+	}
+	if (dsId === `${STATUS_DB}_ds`) {
+		return {
+			object: "data_source",
+			id: dsId,
+			properties: {
+				Title: { type: "title" },
+				"Brain ID": { type: "rich_text" },
+				Date: { type: "date" },
+				Summary: { type: "rich_text" },
+				Presenter: { type: "people" },
+				Addressed: { type: "checkbox" },
+			},
+		};
+	}
+	if (dsId === `${DELIV_DB}_ds`) {
+		return {
+			object: "data_source",
+			id: dsId,
+			properties: {
+				Title: { type: "title" },
+				"Brain ID": { type: "rich_text" },
+				Status: {
+					type: "status",
+					status: {
+						options: [
+							{ name: "Not Started" },
+							{ name: "In Progress" },
+							{ name: "Done" },
+						],
+					},
+				},
+				Timeline: { type: "date" },
+			},
+		};
+	}
+	return { object: "data_source", id: dsId, properties: {} };
 }
 
-describe("verifyDestSchema", () => {
-	it("returns the dataSourceId, optional flags, and category options when schema is healthy", async () => {
+describe("verifyDestSchema — Docs", () => {
+	it("returns dataSourceId, status options, type options when schema is healthy", async () => {
 		const { api } = makeApi();
-		const schema = await verifyDestSchema(api);
-		expect(schema.dataSourceId).toBe("ds_acme");
-		expect(schema.hasOriginalDate).toBe(true);
-		expect(schema.hasOriginUrl).toBe(true);
-		expect([...schema.categoryOptions]).toEqual(
-			expect.arrayContaining(["summary", "action-items"]),
-		);
+		const schema = await verifyDestSchema(api, "Docs");
+		expect(schema.dataSourceId).toBe(`${DOCS_DB}_ds`);
+		expect([...schema.statusOptions].sort()).toEqual([
+			"Archived",
+			"Drafting",
+			"In Review",
+			"Published",
+		]);
+		expect([...schema.typeOptions].sort()).toEqual([
+			"Brand",
+			"Contract",
+			"Framework",
+		]);
+		expect(schema.optionalPropertiesPresent).toEqual({
+			Presenter: false,
+			Addressed: false,
+		});
 	});
 
-	it("waits on the pacer before each SDK call", async () => {
-		const { api, calls } = makeApi();
-		await verifyDestSchema(api);
-		expect(calls.pacerWait).toHaveBeenCalledTimes(2);
+	it("throws when File Name title is missing", async () => {
+		const ds = defaultDsResponseFor(`${DOCS_DB}_ds`);
+		delete (ds.properties as Record<string, unknown>)["File Name"];
+		const { api } = makeApi({ dsResponses: { [`${DOCS_DB}_ds`]: ds } });
+		await expect(verifyDestSchema(api, "Docs")).rejects.toMatchObject({
+			details: { missing: ["File Name"] },
+		});
 	});
 
-	it("flags hasOriginalDate=false when the schema omits Original Date", async () => {
-		const ds = defaultDsResponse();
-		delete (ds.properties as Record<string, unknown>)["Original Date"];
-		const { api } = makeApi({ dsResponse: ds });
-		const schema = await verifyDestSchema(api);
-		expect(schema.hasOriginalDate).toBe(false);
-		expect(schema.hasOriginUrl).toBe(true);
-	});
-
-	it("throws DestinationSchemaMismatch with `missing` when a required property is absent", async () => {
-		const ds = defaultDsResponse();
+	it("throws when Brain ID is missing", async () => {
+		const ds = defaultDsResponseFor(`${DOCS_DB}_ds`);
 		delete (ds.properties as Record<string, unknown>)["Brain ID"];
-		const { api } = makeApi({ dsResponse: ds });
-		try {
-			await verifyDestSchema(api);
-			expect.unreachable("should have thrown");
-		} catch (e) {
-			expect(e).toBeInstanceOf(DestinationSchemaMismatch);
-			if (e instanceof DestinationSchemaMismatch) {
-				expect(e.details.missing).toEqual(["Brain ID"]);
-				expect(e.details.wrongType).toEqual([]);
-			}
-		}
+		const { api } = makeApi({ dsResponses: { [`${DOCS_DB}_ds`]: ds } });
+		await expect(verifyDestSchema(api, "Docs")).rejects.toMatchObject({
+			details: { missing: ["Brain ID"] },
+		});
 	});
 
-	it("throws DestinationSchemaMismatch with `wrongType` when a property has the wrong type", async () => {
-		const ds = defaultDsResponse();
-		(ds.properties as Record<string, unknown>)["Brain ID"] = { type: "title" };
-		const { api } = makeApi({ dsResponse: ds });
+	it("throws on wrong type for Status (e.g., select instead of status)", async () => {
+		const ds = defaultDsResponseFor(`${DOCS_DB}_ds`);
+		(ds.properties as Record<string, unknown>).Status = { type: "select" };
+		const { api } = makeApi({ dsResponses: { [`${DOCS_DB}_ds`]: ds } });
 		try {
-			await verifyDestSchema(api);
+			await verifyDestSchema(api, "Docs");
 			expect.unreachable("should have thrown");
 		} catch (e) {
 			if (e instanceof DestinationSchemaMismatch) {
-				expect(e.details.wrongType).toEqual([
-					{ name: "Brain ID", expected: "rich_text", actual: "title" },
-				]);
+				expect(e.details.wrongType).toContainEqual({
+					name: "Status",
+					expected: "status",
+					actual: "select",
+				});
 			} else {
 				throw e;
 			}
 		}
 	});
+});
 
-	it("throws DestinationSchemaMismatch when the database has multiple data sources", async () => {
-		const db = defaultDbResponse();
-		db.data_sources = [
-			{ id: "ds_a", name: "A" },
-			{ id: "ds_b", name: "B" },
-		];
-		const { api } = makeApi({ dbResponse: db });
-		try {
-			await verifyDestSchema(api);
-			expect.unreachable("should have thrown");
-		} catch (e) {
-			expect(e).toBeInstanceOf(DestinationSchemaMismatch);
-			if (e instanceof DestinationSchemaMismatch) {
-				expect(e.details.hint).toMatch(/exactly one data source/);
-			}
-		}
+describe("verifyDestSchema — StatusUpdate", () => {
+	it("captures optional Presenter + Addressed presence flags", async () => {
+		const { api } = makeApi();
+		const schema = await verifyDestSchema(api, "StatusUpdate");
+		expect(schema.optionalPropertiesPresent).toEqual({
+			Presenter: true,
+			Addressed: true,
+		});
 	});
 
-	it("translates a 404 from databases.retrieve into DestinationSchemaMismatch with a sharing hint", async () => {
-		const err = makeApiError({
-			code: APIErrorCode.ObjectNotFound,
-			status: 404,
-			message: "Not found",
+	it("flags optional as absent when destination lacks them (Presenter only example)", async () => {
+		const ds = defaultDsResponseFor(`${STATUS_DB}_ds`);
+		delete (ds.properties as Record<string, unknown>).Presenter;
+		const { api } = makeApi({ dsResponses: { [`${STATUS_DB}_ds`]: ds } });
+		const schema = await verifyDestSchema(api, "StatusUpdate");
+		expect(schema.optionalPropertiesPresent.Presenter).toBe(false);
+		expect(schema.optionalPropertiesPresent.Addressed).toBe(true);
+	});
+});
+
+describe("verifyDestSchema — Deliverable", () => {
+	it("returns Status options and no Type options (Deliverable has no Type)", async () => {
+		const { api } = makeApi();
+		const schema = await verifyDestSchema(api, "Deliverable");
+		expect(schema.statusOptions.has("Not Started")).toBe(true);
+		expect(schema.typeOptions.size).toBe(0);
+	});
+});
+
+describe("verifyDestSchema — error handling", () => {
+	it("rejects a multi-data-source destination DB", async () => {
+		const { api } = makeApi({
+			dbResponse: {
+				object: "database",
+				id: DOCS_DB,
+				data_sources: [
+					{ id: "ds_a", name: "A" },
+					{ id: "ds_b", name: "B" },
+				],
+			},
 		});
-		const { api } = makeApi({ dbThrows: err });
-		try {
-			await verifyDestSchema(api);
-			expect.unreachable("should have thrown");
-		} catch (e) {
-			expect(e).toBeInstanceOf(DestinationSchemaMismatch);
-		}
+		await expect(verifyDestSchema(api, "Docs")).rejects.toMatchObject({
+			details: { hint: expect.stringMatching(/exactly one data source/) },
+		});
 	});
 
-	it("translates a 401 from databases.retrieve into IntegrationRevoked", async () => {
-		const err = makeApiError({
-			code: APIErrorCode.Unauthorized,
-			status: 401,
-			message: "Unauthorized",
+	it("translates 401 into IntegrationRevoked", async () => {
+		const { api } = makeApi({
+			dbThrows: makeApiError({
+				code: APIErrorCode.Unauthorized,
+				status: 401,
+				message: "u",
+			}),
 		});
-		const { api } = makeApi({ dbThrows: err });
-		await expect(verifyDestSchema(api)).rejects.toBeInstanceOf(IntegrationRevoked);
+		await expect(verifyDestSchema(api, "Docs")).rejects.toBeInstanceOf(IntegrationRevoked);
+	});
+
+	it("translates 404 into DestinationSchemaMismatch with a sharing hint", async () => {
+		const { api } = makeApi({
+			dbThrows: makeApiError({
+				code: APIErrorCode.ObjectNotFound,
+				status: 404,
+				message: "nf",
+			}),
+		});
+		await expect(verifyDestSchema(api, "Docs")).rejects.toBeInstanceOf(
+			DestinationSchemaMismatch,
+		);
 	});
 });
 
 describe("PreflightCache", () => {
-	it("returns the cached promise on subsequent get() calls (one SDK call total)", async () => {
+	it("returns the cached promise on subsequent get() calls for the same docType", async () => {
 		const cache = new PreflightCache();
 		const { api, calls } = makeApi();
-		const a = cache.get(api);
-		const b = cache.get(api);
+		const a = cache.get(api, "Docs");
+		const b = cache.get(api, "Docs");
 		expect(a).toBe(b);
 		await a;
-		await b;
 		expect(calls.dbRetrieve).toHaveBeenCalledTimes(1);
 		expect(calls.dsRetrieve).toHaveBeenCalledTimes(1);
+	});
+
+	it("treats different docTypes as separate cache entries", async () => {
+		const cache = new PreflightCache();
+		const { api, calls } = makeApi();
+		await cache.get(api, "Docs");
+		await cache.get(api, "StatusUpdate");
+		expect(calls.dbRetrieve).toHaveBeenCalledTimes(2);
+		expect(calls.dsRetrieve).toHaveBeenCalledTimes(2);
 	});
 
 	it("clears the entry on a rejected promise so the next call retries", async () => {
@@ -205,9 +311,26 @@ describe("PreflightCache", () => {
 				message: "x",
 			}),
 		});
-		await expect(cache.get(api)).rejects.toBeInstanceOf(IntegrationRevoked);
-		// Subsequent call should re-invoke the SDK (not reuse the failed promise).
-		await expect(cache.get(api)).rejects.toBeInstanceOf(IntegrationRevoked);
+		await expect(cache.get(api, "Docs")).rejects.toBeInstanceOf(IntegrationRevoked);
+		await expect(cache.get(api, "Docs")).rejects.toBeInstanceOf(IntegrationRevoked);
 		expect(calls.dbRetrieve).toHaveBeenCalledTimes(2);
+	});
+
+	it("seed pre-populates the cache so get() doesn't call the SDK", async () => {
+		const cache = new PreflightCache();
+		const { api, calls } = makeApi();
+		const seeded = {
+			dataSourceId: "seeded_ds",
+			statusOptions: new Set(["Drafting"]),
+			typeOptions: new Set(["Contract"]),
+			optionalPropertiesPresent: { Presenter: false, Addressed: false },
+		};
+		cache.seed(
+			{ id: api.id, docType: "Docs" as DocType, destDbId: api.destDbIdsByType.Docs },
+			seeded,
+		);
+		const got = await cache.get(api, "Docs");
+		expect(got).toBe(seeded);
+		expect(calls.dbRetrieve).not.toHaveBeenCalled();
 	});
 });

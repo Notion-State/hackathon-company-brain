@@ -16,6 +16,7 @@ export type PushToClientErrorJson = {
 export type PushToClientErrorCode =
 	| "CLIENT_NOT_CONFIGURED"
 	| "PRODUCTION_PUSH_NOT_AUTHORIZED"
+	| "MISSING_REQUIRED_FIELD"
 	| "DESTINATION_SCHEMA_MISMATCH"
 	| "MARKDOWN_TOO_LONG"
 	| "INTEGRATION_REVOKED"
@@ -71,11 +72,34 @@ export class ProductionPushNotAuthorized extends PushToClientError {
 	}
 }
 
+export class MissingRequiredField extends PushToClientError {
+	readonly code = "MISSING_REQUIRED_FIELD" as const;
+	readonly docType: string;
+	readonly field: string;
+
+	constructor(docType: string, field: string) {
+		super(
+			`Push of docType "${docType}" requires field "${field}", which is missing or empty.`,
+		);
+		this.docType = docType;
+		this.field = field;
+	}
+
+	override toJSON(): PushToClientErrorJson {
+		return {
+			...super.toJSON(),
+			details: { docType: this.docType, field: this.field },
+		};
+	}
+}
+
 export type SchemaMismatchDetails = {
 	missing: string[];
 	wrongType: Array<{ name: string; expected: string; actual: string }>;
-	unknownCategory?: string;
-	validCategories?: string[];
+	unknownStatus?: string;
+	validStatuses?: string[];
+	unknownType?: string;
+	validTypes?: string[];
 	hint?: string;
 };
 
@@ -104,11 +128,17 @@ function formatSchemaMismatch(d: SchemaMismatchDetails): string {
 			.join(", ");
 		parts.push(`wrong types: ${list}`);
 	}
-	if (d.unknownCategory !== undefined) {
-		const valid = d.validCategories?.length
-			? ` (valid: ${d.validCategories.join(", ")})`
+	if (d.unknownStatus !== undefined) {
+		const valid = d.validStatuses?.length
+			? ` (valid: ${d.validStatuses.join(", ")})`
 			: "";
-		parts.push(`unknown category "${d.unknownCategory}"${valid}`);
+		parts.push(`unknown status "${d.unknownStatus}"${valid}`);
+	}
+	if (d.unknownType !== undefined) {
+		const valid = d.validTypes?.length
+			? ` (valid: ${d.validTypes.join(", ")})`
+			: "";
+		parts.push(`unknown type "${d.unknownType}"${valid}`);
 	}
 	if (d.hint) parts.push(d.hint);
 	return parts.length > 0

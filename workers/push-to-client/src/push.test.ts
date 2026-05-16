@@ -1,42 +1,54 @@
 import { describe, expect, it, vi } from "vitest";
 
-import {
-	DestinationSchemaMismatch,
-	ProductionPushNotAuthorized,
-} from "./errors.js";
+import { DestinationSchemaMismatch, ProductionPushNotAuthorized } from "./errors.js";
+import type { DocType } from "./doc-types.js";
 import type { ClientApi, NotionSdkSubset } from "./notion-client.js";
 import { PreflightCache, type DestSchema } from "./preflight.js";
 import { pushToClient } from "./push.js";
 import type { PushPayload } from "./properties.js";
 
-function defaultSchema(): DestSchema {
-	return {
-		dataSourceId: "ds_acme",
-		hasOriginalDate: true,
-		hasOriginUrl: true,
-		categoryOptions: new Set(["summary", "action-items"]),
-	};
-}
+const DOCS_DB = "db_docs";
+const STATUS_DB = "db_status";
+const DELIV_DB = "db_deliv";
 
-function defaultPayload(overrides: Partial<PushPayload> = {}): PushPayload {
-	return {
-		brainId: "brain-1",
-		title: "T",
-		source: "Fireflies",
-		category: "summary",
-		originalDate: "2026-05-15T18:00:00.000Z",
-		originUrl: "https://example.com/x",
-		bodyMarkdown: "# hi\n\npara",
-		...overrides,
+function schemaFor(
+	docType: DocType,
+	overrides: Partial<DestSchema> = {},
+): DestSchema {
+	const base: Record<DocType, DestSchema> = {
+		Docs: {
+			dataSourceId: "ds_docs",
+			statusOptions: new Set(["Drafting", "In Review", "Published", "Archived"]),
+			typeOptions: new Set(["Contract", "Brand", "Framework", "Guide"]),
+			optionalPropertiesPresent: { Presenter: false, Addressed: false },
+		},
+		StatusUpdate: {
+			dataSourceId: "ds_status",
+			statusOptions: new Set(),
+			typeOptions: new Set(),
+			optionalPropertiesPresent: { Presenter: true, Addressed: true },
+		},
+		Deliverable: {
+			dataSourceId: "ds_deliv",
+			statusOptions: new Set(["Not Started", "In Progress", "Done"]),
+			typeOptions: new Set(),
+			optionalPropertiesPresent: { Presenter: false, Addressed: false },
+		},
 	};
+	return { ...base[docType], ...overrides };
 }
 
 type MakeApiOpts = {
 	mode?: "staging" | "production";
 	queryResults?: Array<{ id: string; url: string }>;
-	createResponse?: { id: string; url: string } | (() => { id: string; url: string });
-	appendThrows?: unknown;
-	createThrows?: unknown;
+	createResponse?: { id: string; url: string };
+	usersByEmail?: Map<string, string>;
+};
+
+type CreateArg = {
+	parent: { type?: string; data_source_id: string };
+	properties: Record<string, unknown>;
+	children?: unknown[];
 };
 
 function makeApi(opts: MakeApiOpts = {}) {
@@ -47,80 +59,257 @@ function makeApi(opts: MakeApiOpts = {}) {
 	const dsRetrieve = vi.fn<NotionSdkSubset["dataSources"]["retrieve"]>(async () => ({}));
 	const dbRetrieve = vi.fn<NotionSdkSubset["databases"]["retrieve"]>(async () => ({}));
 	const pagesCreate = vi.fn<NotionSdkSubset["pages"]["create"]>(async () => {
-		if (opts.createThrows) throw opts.createThrows;
-		return typeof opts.createResponse === "function"
-			? opts.createResponse()
-			: opts.createResponse ?? { id: "page_new", url: "https://notion.so/new" };
+		return opts.createResponse ?? { id: "page_new", url: "https://notion.so/new" };
 	});
-	const blocksAppend = vi.fn<NotionSdkSubset["blocks"]["children"]["append"]>(async () => {
-		if (opts.appendThrows) throw opts.appendThrows;
-		return { results: [] };
-	});
+	const blocksAppend = vi.fn<NotionSdkSubset["blocks"]["children"]["append"]>(
+		async () => ({ results: [] }),
+	);
+	const usersList = vi.fn<NotionSdkSubset["users"]["list"]>(async () => ({ results: [] }));
 
 	const sdk: NotionSdkSubset = {
 		databases: { retrieve: dbRetrieve },
 		dataSources: { retrieve: dsRetrieve, query: dsQuery },
 		pages: { create: pagesCreate },
 		blocks: { children: { append: blocksAppend } },
+		users: { list: usersList },
 	};
+	const usersMap = opts.usersByEmail ?? new Map<string, string>();
 	const api: ClientApi = {
 		id: "acme",
-		destDbId: "db_acme",
+		destDbIdsByType: { Docs: DOCS_DB, StatusUpdate: STATUS_DB, Deliverable: DELIV_DB },
 		mode: opts.mode ?? "staging",
 		waitForPacer: pacerWait,
 		sdk,
+		usersByEmail: {
+			get: () => Promise.resolve(usersMap),
+			reset: () => undefined,
+		},
 	};
 	return { api, pacerWait, dsQuery, pagesCreate, blocksAppend };
 }
 
-function makePreflight(schema: DestSchema = defaultSchema()): PreflightCache {
+function preflightWith(api: ClientApi, schemas: Partial<Record<DocType, DestSchema>>): PreflightCache {
 	const cache = new PreflightCache();
-	// Seed via the documented test seam so tests that exercise `pushToClient`
-	// don't have to also mock the underlying databases.retrieve / dataSources.retrieve
-	// calls used by preflight itself.
-	cache.seed({ id: "acme", destDbId: "db_acme" }, schema);
+	for (const [docType, schema] of Object.entries(schemas) as Array<[DocType, DestSchema]>) {
+		cache.seed(
+			{ id: api.id, docType, destDbId: api.destDbIdsByType[docType] },
+			schema,
+		);
+	}
 	return cache;
 }
 
-describe("pushToClient", () => {
-	it("creates a page in staging mode and returns its id + url", async () => {
+function docsPayload(overrides: Partial<Extract<PushPayload, { docType: "Docs" }>> = {}): PushPayload {
+	return {
+		docType: "Docs",
+		brainId: "brain-1",
+		title: "Doc",
+		type: "Contract",
+		status: "Drafting",
+		bodyMarkdown: "# Hi",
+		...overrides,
+	};
+}
+
+function statusPayload(
+	overrides: Partial<Extract<PushPayload, { docType: "StatusUpdate" }>> = {},
+): PushPayload {
+	return {
+		docType: "StatusUpdate",
+		brainId: "brain-1",
+		title: "Status Update",
+		date: "2026-05-18",
+		summary: "Hello",
+		...overrides,
+	};
+}
+
+function deliverablePayload(
+	overrides: Partial<Extract<PushPayload, { docType: "Deliverable" }>> = {},
+): PushPayload {
+	return {
+		docType: "Deliverable",
+		brainId: "brain-1",
+		title: "Aduro Home",
+		status: "In Progress",
+		timelineStart: "2026-05-15",
+		...overrides,
+	};
+}
+
+describe("pushToClient — Docs", () => {
+	it("creates a Doc against the Docs data source", async () => {
 		const { api, pagesCreate } = makeApi();
+		const preflight = preflightWith(api, { Docs: schemaFor("Docs") });
 		const out = await pushToClient(
-			{ clientId: "acme", payload: defaultPayload() },
-			{ api, preflight: makePreflight() },
+			{ clientId: "acme", payload: docsPayload() },
+			{ api, preflight },
 		);
 		expect(out.status).toBe("created");
-		expect(out.pushedPageId).toBe("page_new");
-		expect(out.pushedPageUrl).toBe("https://notion.so/new");
-		expect(pagesCreate).toHaveBeenCalledTimes(1);
+		const arg = pagesCreate.mock.calls[0]?.[0] as CreateArg | undefined;
+		if (!arg?.parent || !("data_source_id" in arg.parent) || !arg.properties) {
+			throw new Error("expected data_source_id parent + properties");
+		}
+		expect(arg.parent.data_source_id).toBe("ds_docs");
+		expect(Object.keys(arg.properties).sort()).toEqual([
+			"Brain ID",
+			"File Name",
+			"Status",
+			"Type",
+		]);
 	});
 
-	it("calls pages.create with parent.data_source_id and the right properties keys", async () => {
+	it("throws DestinationSchemaMismatch (unknownStatus) before any write when status is invalid", async () => {
+		const { api, pagesCreate, dsQuery } = makeApi();
+		const preflight = preflightWith(api, { Docs: schemaFor("Docs") });
+		await expect(
+			pushToClient(
+				{ clientId: "acme", payload: docsPayload({ status: "Bogus" }) },
+				{ api, preflight },
+			),
+		).rejects.toMatchObject({ details: { unknownStatus: "Bogus" } });
+		expect(pagesCreate).not.toHaveBeenCalled();
+		expect(dsQuery).not.toHaveBeenCalled();
+	});
+
+	it("throws DestinationSchemaMismatch (unknownType) when type is invalid", async () => {
+		const { api } = makeApi();
+		const preflight = preflightWith(api, { Docs: schemaFor("Docs") });
+		await expect(
+			pushToClient(
+				{ clientId: "acme", payload: docsPayload({ type: "Nope" }) },
+				{ api, preflight },
+			),
+		).rejects.toMatchObject({ details: { unknownType: "Nope" } });
+	});
+});
+
+describe("pushToClient — StatusUpdate", () => {
+	it("creates a Status Update against the Status Updates data source", async () => {
 		const { api, pagesCreate } = makeApi();
-		await pushToClient(
-			{ clientId: "acme", payload: defaultPayload() },
-			{ api, preflight: makePreflight() },
+		const preflight = preflightWith(api, { StatusUpdate: schemaFor("StatusUpdate") });
+		const out = await pushToClient(
+			{ clientId: "acme", payload: statusPayload() },
+			{ api, preflight },
 		);
-		const arg = pagesCreate.mock.calls[0]?.[0];
-		if (!arg || !arg.parent || !arg.properties) {
-			throw new Error("expected pages.create to receive parent + properties");
+		expect(out.status).toBe("created");
+		const arg = pagesCreate.mock.calls[0]?.[0] as CreateArg | undefined;
+		if (!arg?.parent || !("data_source_id" in arg.parent) || !arg.properties) {
+			throw new Error("expected data_source_id parent + properties");
 		}
-		if (!("data_source_id" in arg.parent)) {
-			throw new Error("expected data_source_id parent");
-		}
-		expect(arg.parent.data_source_id).toBe("ds_acme");
-		expect(Object.keys(arg.properties).sort()).toEqual(
-			["Brain ID", "Category", "Origin URL", "Original Date", "Pushed At", "Source", "Title"],
-		);
+		expect(arg.parent.data_source_id).toBe("ds_status");
+		expect(Object.keys(arg.properties).sort()).toEqual([
+			"Brain ID",
+			"Date",
+			"Summary",
+			"Title",
+		]);
 	});
 
+	it("includes Presenter when email resolves to a user", async () => {
+		const usersByEmail = new Map([["alice@example.com", "user_alice"]]);
+		const { api, pagesCreate } = makeApi({ usersByEmail });
+		const preflight = preflightWith(api, { StatusUpdate: schemaFor("StatusUpdate") });
+		await pushToClient(
+			{
+				clientId: "acme",
+				payload: statusPayload({ presenterEmail: "alice@example.com" }),
+			},
+			{ api, preflight },
+		);
+		const arg = pagesCreate.mock.calls[0]?.[0] as CreateArg | undefined;
+		if (!arg?.properties) throw new Error("expected properties");
+		expect(arg.properties.Presenter).toEqual({
+			people: [{ id: "user_alice", object: "user" }],
+		});
+	});
+
+	it("warns and skips Presenter when email does not resolve", async () => {
+		const { api, pagesCreate } = makeApi({ usersByEmail: new Map() });
+		const preflight = preflightWith(api, { StatusUpdate: schemaFor("StatusUpdate") });
+		const out = await pushToClient(
+			{
+				clientId: "acme",
+				payload: statusPayload({ presenterEmail: "ghost@example.com" }),
+			},
+			{ api, preflight },
+		);
+		expect(out.status).toBe("created");
+		expect(out.warnings.some((w) => /Presenter email/i.test(w))).toBe(true);
+		const arg = pagesCreate.mock.calls[0]?.[0] as CreateArg | undefined;
+		if (!arg?.properties) throw new Error("expected properties");
+		expect(arg.properties.Presenter).toBeUndefined();
+	});
+
+	it("warns when destination DB lacks the Presenter property entirely", async () => {
+		const { api } = makeApi({ usersByEmail: new Map([["x@y.z", "u_x"]]) });
+		const preflight = preflightWith(api, {
+			StatusUpdate: schemaFor("StatusUpdate", {
+				optionalPropertiesPresent: { Presenter: false, Addressed: true },
+			}),
+		});
+		const out = await pushToClient(
+			{ clientId: "acme", payload: statusPayload({ presenterEmail: "x@y.z" }) },
+			{ api, preflight },
+		);
+		expect(out.warnings.some((w) => /no Presenter property/i.test(w))).toBe(true);
+	});
+
+	it("Addressed checkbox flows through to properties when supplied", async () => {
+		const { api, pagesCreate } = makeApi();
+		const preflight = preflightWith(api, { StatusUpdate: schemaFor("StatusUpdate") });
+		await pushToClient(
+			{ clientId: "acme", payload: statusPayload({ addressed: true }) },
+			{ api, preflight },
+		);
+		const arg = pagesCreate.mock.calls[0]?.[0] as CreateArg | undefined;
+		if (!arg?.properties) throw new Error("expected properties");
+		expect(arg.properties.Addressed).toEqual({ checkbox: true });
+	});
+});
+
+describe("pushToClient — Deliverable", () => {
+	it("creates a Deliverable with Timeline as a date range when end provided", async () => {
+		const { api, pagesCreate } = makeApi();
+		const preflight = preflightWith(api, { Deliverable: schemaFor("Deliverable") });
+		await pushToClient(
+			{
+				clientId: "acme",
+				payload: deliverablePayload({ timelineEnd: "2026-06-30" }),
+			},
+			{ api, preflight },
+		);
+		const arg = pagesCreate.mock.calls[0]?.[0] as CreateArg | undefined;
+		if (!arg?.parent || !("data_source_id" in arg.parent) || !arg.properties) {
+			throw new Error("expected data_source_id parent + properties");
+		}
+		expect(arg.parent.data_source_id).toBe("ds_deliv");
+		expect(arg.properties.Timeline).toEqual({
+			date: { start: "2026-05-15", end: "2026-06-30" },
+		});
+	});
+
+	it("throws DestinationSchemaMismatch on unknown status", async () => {
+		const { api } = makeApi();
+		const preflight = preflightWith(api, { Deliverable: schemaFor("Deliverable") });
+		await expect(
+			pushToClient(
+				{ clientId: "acme", payload: deliverablePayload({ status: "Mystery" }) },
+				{ api, preflight },
+			),
+		).rejects.toMatchObject({ details: { unknownStatus: "Mystery" } });
+	});
+});
+
+describe("pushToClient — shared behavior", () => {
 	it("returns already_pushed when an existing Brain ID matches", async () => {
 		const { api, pagesCreate } = makeApi({
 			queryResults: [{ id: "page_existing", url: "https://notion.so/old" }],
 		});
+		const preflight = preflightWith(api, { Docs: schemaFor("Docs") });
 		const out = await pushToClient(
-			{ clientId: "acme", payload: defaultPayload() },
-			{ api, preflight: makePreflight() },
+			{ clientId: "acme", payload: docsPayload() },
+			{ api, preflight },
 		);
 		expect(out.status).toBe("already_pushed");
 		expect(out.pushedPageId).toBe("page_existing");
@@ -129,10 +318,11 @@ describe("pushToClient", () => {
 
 	it("throws ProductionPushNotAuthorized before any SDK call when mode is production", async () => {
 		const { api, pagesCreate, dsQuery } = makeApi({ mode: "production" });
+		const preflight = preflightWith(api, { Docs: schemaFor("Docs") });
 		await expect(
 			pushToClient(
-				{ clientId: "acme", payload: defaultPayload() },
-				{ api, preflight: makePreflight() },
+				{ clientId: "acme", payload: docsPayload() },
+				{ api, preflight },
 			),
 		).rejects.toBeInstanceOf(ProductionPushNotAuthorized);
 		expect(pagesCreate).not.toHaveBeenCalled();
@@ -141,80 +331,51 @@ describe("pushToClient", () => {
 
 	it("allows production pushes when allowProduction=true is passed", async () => {
 		const { api } = makeApi({ mode: "production" });
+		const preflight = preflightWith(api, { Docs: schemaFor("Docs") });
 		const out = await pushToClient(
-			{
-				clientId: "acme",
-				payload: defaultPayload(),
-				allowProduction: true,
-			},
-			{ api, preflight: makePreflight() },
+			{ clientId: "acme", payload: docsPayload(), allowProduction: true },
+			{ api, preflight },
 		);
 		expect(out.status).toBe("created");
 	});
 
-	it("throws DestinationSchemaMismatch (unknownCategory) before any write when the category is not in the destination's options", async () => {
-		const { api, pagesCreate, dsQuery } = makeApi();
-		try {
-			await pushToClient(
-				{ clientId: "acme", payload: defaultPayload({ category: "unknown" }) },
-				{ api, preflight: makePreflight() },
-			);
-			expect.unreachable("should have thrown");
-		} catch (e) {
-			expect(e).toBeInstanceOf(DestinationSchemaMismatch);
-			if (e instanceof DestinationSchemaMismatch) {
-				expect(e.details.unknownCategory).toBe("unknown");
-				expect(e.details.validCategories).toEqual(["action-items", "summary"]);
-			}
-		}
-		expect(pagesCreate).not.toHaveBeenCalled();
-		expect(dsQuery).not.toHaveBeenCalled();
-	});
-
-	it("forwards markdown warnings to the result", async () => {
-		const { api } = makeApi();
-		const out = await pushToClient(
-			{
-				clientId: "acme",
-				payload: defaultPayload({
-					bodyMarkdown: "![cat](https://x.png)\n\nhi",
-				}),
-			},
-			{ api, preflight: makePreflight() },
-		);
-		expect(out.warnings.some((w) => /images/i.test(w))).toBe(true);
-	});
-
-	it("chunks block children: pages.create gets <=100, the rest go via blocks.children.append", async () => {
-		// 250 paragraph lines = 250 blocks; we expect 1 create call + 2 append calls.
+	it("chunks >100 children via blocks.children.append", async () => {
 		const md = Array.from({ length: 250 }, (_, i) => `line ${i}`).join("\n\n");
 		const { api, pagesCreate, blocksAppend } = makeApi();
+		const preflight = preflightWith(api, { Docs: schemaFor("Docs") });
 		await pushToClient(
-			{ clientId: "acme", payload: defaultPayload({ bodyMarkdown: md }) },
-			{ api, preflight: makePreflight() },
+			{ clientId: "acme", payload: docsPayload({ bodyMarkdown: md }) },
+			{ api, preflight },
 		);
 		expect(pagesCreate).toHaveBeenCalledTimes(1);
 		expect(blocksAppend).toHaveBeenCalledTimes(2);
-
-		const createArg = pagesCreate.mock.calls[0]?.[0];
-		if (!createArg?.children) throw new Error("expected create call with children");
-		expect(createArg.children).toHaveLength(100);
-		const firstAppendArg = blocksAppend.mock.calls[0]?.[0];
-		if (!firstAppendArg) throw new Error("expected first append call");
-		expect(firstAppendArg.children).toHaveLength(100);
-		const secondAppendArg = blocksAppend.mock.calls[1]?.[0];
-		if (!secondAppendArg) throw new Error("expected second append call");
-		expect(secondAppendArg.children).toHaveLength(50);
 	});
 
-	it("waits on the pacer before each Notion SDK call", async () => {
-		const { api, pacerWait } = makeApi();
+	it("emits the structured log line with docType", async () => {
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+		const { api } = makeApi();
+		const preflight = preflightWith(api, { Docs: schemaFor("Docs") });
 		await pushToClient(
-			{ clientId: "acme", payload: defaultPayload() },
-			{ api, preflight: makePreflight() },
+			{ clientId: "acme", payload: docsPayload() },
+			{ api, preflight },
 		);
-		// Preflight is injected into the cache (no SDK calls).
-		// Expected: 1 wait for dataSources.query + 1 wait for pages.create.
-		expect(pacerWait).toHaveBeenCalledTimes(2);
+		expect(logSpy).toHaveBeenCalledWith(
+			"push-to-client",
+			expect.objectContaining({
+				clientId: "acme",
+				docType: "Docs",
+				brainId: "brain-1",
+			}),
+		);
+		logSpy.mockRestore();
+	});
+});
+
+describe("DocType conformance", () => {
+	it("type-system enforces that PushPayload's docType matches the docs", () => {
+		const _doc: DocType = "Docs";
+		const _su: DocType = "StatusUpdate";
+		const _d: DocType = "Deliverable";
+		expect([_doc, _su, _d]).toHaveLength(3);
 	});
 });

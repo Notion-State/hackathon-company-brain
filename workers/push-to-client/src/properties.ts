@@ -1,5 +1,6 @@
 import type { CreatePageParameters } from "@notionhq/client/build/src/api-endpoints/pages.js";
 
+import { BRAIN_ID_PROPERTY, DOC_TYPE_SPECS, type DocType } from "./doc-types.js";
 import { splitText } from "./markdown.js";
 import type { DestSchema } from "./preflight.js";
 
@@ -22,47 +23,140 @@ export const properties = {
 	select(name: string): PagePropertyValue {
 		return { select: { name } };
 	},
+	status(name: string): PagePropertyValue {
+		return { status: { name } };
+	},
 	date(iso: string): PagePropertyValue {
 		return { date: { start: iso } };
+	},
+	dateRange(start: string, end?: string | null): PagePropertyValue {
+		// Notion accepts `{ start, end? }`. Passing `end: undefined` or `null` both
+		// fall back to single-date behavior — the SDK type accepts `end?: string | null`.
+		if (end && end.length > 0) {
+			return { date: { start, end } };
+		}
+		return { date: { start } };
+	},
+	checkbox(value: boolean): PagePropertyValue {
+		return { checkbox: value };
 	},
 	url(href: string): PagePropertyValue {
 		return { url: href };
 	},
-};
-
-export type PushPayload = {
-	brainId: string;
-	title: string;
-	source: "Fireflies" | "Slack" | "Loom" | "Other";
-	category: string;
-	originalDate?: string | null;
-	originUrl?: string | null;
-	bodyMarkdown?: string | null;
+	people(userIds: string[]): PagePropertyValue {
+		return { people: userIds.map((id) => ({ id, object: "user" as const })) };
+	},
 };
 
 /**
- * Builds the full `properties` map for `pages.create`. Required props are
- * always present; optional props are included only when both the payload value
- * is present AND the destination schema has the property declared.
+ * Discriminated payload shape for the push pipeline. `push.ts` builds one of
+ * these from the tool input's flat shape after validating per-doctype required
+ * fields.
  */
-export function buildProperties(
+export type PushPayload =
+	| {
+			docType: "Docs";
+			brainId: string;
+			title: string;
+			type: string;
+			status: string;
+			bodyMarkdown?: string | null;
+	  }
+	| {
+			docType: "StatusUpdate";
+			brainId: string;
+			title: string;
+			date: string;
+			summary: string;
+			presenterEmail?: string | null;
+			addressed?: boolean | null;
+			bodyMarkdown?: string | null;
+	  }
+	| {
+			docType: "Deliverable";
+			brainId: string;
+			title: string;
+			status: string;
+			timelineStart: string;
+			timelineEnd?: string | null;
+			bodyMarkdown?: string | null;
+	  };
+
+/**
+ * Builds the full `properties` map for `pages.create` based on the docType.
+ * Required props are always present; optional props are included only when
+ * both the payload value is present AND the destination schema records the
+ * property as available.
+ *
+ * `presenterUserId` (StatusUpdate only) is the email-resolved Notion user id.
+ * If `undefined`, the Presenter property is skipped — the caller is expected
+ * to have emitted a warning to the agent.
+ */
+export function buildPropertiesFor(
 	payload: PushPayload,
 	schema: DestSchema,
-	now: Date = new Date(),
+	presenterUserId?: string,
 ): PageProperties {
-	const out: PageProperties = {
-		Title: properties.title(payload.title),
-		"Brain ID": properties.richText(payload.brainId),
-		Source: properties.select(payload.source),
-		Category: properties.select(payload.category),
-		"Pushed At": properties.date(now.toISOString()),
-	};
-
-	if (schema.hasOriginalDate && payload.originalDate) {
-		out["Original Date"] = properties.date(payload.originalDate);
+	switch (payload.docType) {
+		case "Docs":
+			return buildDocs(payload, schema);
+		case "StatusUpdate":
+			return buildStatusUpdate(payload, schema, presenterUserId);
+		case "Deliverable":
+			return buildDeliverable(payload, schema);
 	}
-	if (schema.hasOriginUrl && payload.originUrl) {
-		out["Origin URL"] = properties.url(payload.originUrl);
+}
+
+function buildDocs(
+	payload: Extract<PushPayload, { docType: "Docs" }>,
+	_schema: DestSchema,
+): PageProperties {
+	const titleProp = DOC_TYPE_SPECS.Docs.titleProperty.name; // "File Name"
+	return {
+		[titleProp]: properties.title(payload.title),
+		[BRAIN_ID_PROPERTY]: properties.richText(payload.brainId),
+		Status: properties.status(payload.status),
+		Type: properties.select(payload.type),
+	};
+}
+
+function buildStatusUpdate(
+	payload: Extract<PushPayload, { docType: "StatusUpdate" }>,
+	schema: DestSchema,
+	presenterUserId?: string,
+): PageProperties {
+	const titleProp = DOC_TYPE_SPECS.StatusUpdate.titleProperty.name; // "Title"
+	const out: PageProperties = {
+		[titleProp]: properties.title(payload.title),
+		[BRAIN_ID_PROPERTY]: properties.richText(payload.brainId),
+		Date: properties.date(payload.date),
+		Summary: properties.richText(payload.summary),
+	};
+	if (schema.optionalPropertiesPresent.Presenter && presenterUserId) {
+		out.Presenter = properties.people([presenterUserId]);
+	}
+	if (
+		schema.optionalPropertiesPresent.Addressed &&
+		payload.addressed != null
+	) {
+		out.Addressed = properties.checkbox(payload.addressed);
 	}
 	return out;
+}
+
+function buildDeliverable(
+	payload: Extract<PushPayload, { docType: "Deliverable" }>,
+	_schema: DestSchema,
+): PageProperties {
+	const titleProp = DOC_TYPE_SPECS.Deliverable.titleProperty.name; // "Title"
+	return {
+		[titleProp]: properties.title(payload.title),
+		[BRAIN_ID_PROPERTY]: properties.richText(payload.brainId),
+		Status: properties.status(payload.status),
+		Timeline: properties.dateRange(payload.timelineStart, payload.timelineEnd),
+	};
+}
+
+export function pickDocType(payload: PushPayload): DocType {
+	return payload.docType;
 }

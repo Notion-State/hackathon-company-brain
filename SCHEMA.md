@@ -150,33 +150,58 @@ Page-body rendering supports `paragraph`, `heading_1/2/3`, `bulleted_list_item`,
 
 See `workers/ingest-client-notion/README.md` for the five-step onboarding runbook (create internal integration → share DB → conform schema → send token+dbId → operator wires `ntn workers env set`).
 
-### `Company Brain Inbox` (client-managed; **contract**, not a managed database)
+### Transformation Hub destinations (client-managed; **contracts**, not managed databases)
 
-The destination database in a client's Notion workspace. **We do not manage this database** — the client clones it from our published contract into their own workspace and shares it with the internal integration we configure in `workers/push-to-client`. The `pushToClient` tool reads the schema via `databases.retrieve` (preflight) and writes one page per call via `pages.create` against the resolved data source.
+`workers/push-to-client` writes into three destination databases per client, each conforming to the canonical **Transformation Hub** schema (https://www.notion.so/d931147211b445d9b62b0fd66cf5ff2b). **We do not manage these databases** — the client clones each from the canonical template into their own workspace and shares it with the integration we configure on the worker.
 
-Required properties must exist with the listed type or `pushToClient` throws `DestinationSchemaMismatch` before any write. Optional properties are written when present and silently skipped when absent.
+Every destination database has a single augmentation we publish on top of the canonical schema:
+
+- `Brain ID` (rich_text) — **idempotency key.** `pushToClient` queries `Brain ID == payload.brainId` against the data source before every push; a hit returns `status: "already_pushed"` and no new page is created. Manual entries in the destination must not reuse this property — pre-existing duplicates are not deduped retroactively.
+
+Preflight is per-`docType`: it resolves the configured database id to its single data source, verifies the required canonical properties + `Brain ID` are present with the right types, captures `Status` / `Type` options for push-time option validation, and records optional-property presence. `DestinationSchemaMismatch` is thrown before any write on missing/wrong-type props or on unknown option values supplied by the caller.
+
+#### `Docs` (push target for `docType=Docs`)
 
 | Property | Type | Required | Notes |
 |---|---|---|---|
-| `Title` | title | yes | From `payload.title`. The human reviewer is expected to have proofread it. |
-| `Brain ID` | rich_text | yes | **Idempotency key.** The categorizer's Review Queue page id. `pushToClient` queries `Brain ID == payload.brainId` before every push; a hit returns `status: "already_pushed"` and no new page is created. Manual entries in the destination must not reuse this property — pre-existing duplicates are not deduped retroactively. |
-| `Source` | select | yes | Options the client must declare: `Fireflies`, `Slack`, `Loom`, `Other`. |
-| `Category` | select | yes | Options align with the categorizer taxonomy (TBD; canonical list will live in this section once the categorizer ships). Push-time validation: `pushToClient` reads `Category.select.options` at preflight and rejects unknown categories with `DestinationSchemaMismatch` carrying `validCategories`. |
-| `Original Date` | date | no | ISO 8601 datetime of the source event. |
-| `Origin URL` | url | no | Permalink to the source (Fireflies meeting, Slack permalink, Loom video). |
-| `Pushed At` | date | yes | Set by `pushToClient` to the ISO timestamp at create. |
+| `File Name` | title | yes | From `payload.title`. |
+| `Brain ID` | rich_text | yes | Our augmentation. Idempotency key. |
+| `Status` | status | yes | Options: `Drafting` / `In Review` / `Published` / `Archived`. Push-time validated against the destination's option set. |
+| `Type` | select | yes | Options: `Contract`, `Brand`, `Framework`, `Requirements`, `Guide`, `Research`, `Planning`, `Analysis`. Push-time validated against the destination's option set. |
+| `Project` | relation | n/a | **Not set by this tool** in MVP — relations to other client-owned databases require destination-side page ids the agent doesn't have. The client links these manually post-push. |
+
+#### `Status Updates` (push target for `docType=StatusUpdate`)
+
+| Property | Type | Required | Notes |
+|---|---|---|---|
+| `Title` | title | yes | From `payload.title` (e.g., `"Status Update @Next Monday"`). |
+| `Brain ID` | rich_text | yes | Our augmentation. Idempotency key. |
+| `Date` | date | yes | From `payload.date`. ISO 8601. |
+| `Summary` | rich_text | yes | Free-text summary from `payload.summary`. |
+| `Presenter` | people | no | **Best-effort.** When the destination has the property and `payload.presenterEmail` is set, we resolve the email against the destination workspace's users via `users.list` and write the matching user id. Unresolved → property left empty and a warning is returned. Skipped (with a warning) when the destination lacks the property. |
+| `Addressed` | checkbox | no | From `payload.addressed`. Skipped when null or when the destination lacks the property. |
+| `Event` | relation | n/a | **Not set by this tool** in MVP. Same reason as Docs `Project`. |
+
+#### `Deliverables` (push target for `docType=Deliverable`)
+
+| Property | Type | Required | Notes |
+|---|---|---|---|
+| `Title` | title | yes | From `payload.title` (e.g., `"Aduro Home"`). |
+| `Brain ID` | rich_text | yes | Our augmentation. Idempotency key. |
+| `Status` | status | yes | Options: `Not Started` / `Planning` / `In Progress` / `In Review` / `Ongoing` / `Postponed` / `Blocked` / `Done` / `Propose Delete`. Push-time validated against the destination's option set. |
+| `Timeline` | date | yes | From `payload.timelineStart` (single date) or `(timelineStart, timelineEnd)` (date range). |
 
 #### Page body
 
-Constructed by `pushToClient` from `payload.bodyMarkdown` via a documented Markdown subset (paragraphs, `#`/`##`/`###` headings, `-`/`1.` lists, fenced code blocks ` ``` `, `>` quotes, `---` dividers, inline `**bold**` / `*italic*` / `` `code` `` / `[text](url)`). Unsupported syntax is dropped with a warning surfaced in the tool result. Body is bounded at 50 KB; per-block rich-text runs are split at Notion's 2000-character limit; the `pages.create` 100-child cap is handled with chunked `blocks.children.append`.
+For all three doc types, the page body is constructed from `payload.bodyMarkdown` via a documented Markdown subset (paragraphs, `#`/`##`/`###` headings, `-`/`1.` lists, fenced code blocks ` ``` `, `>` quotes, `---` dividers, inline `**bold**` / `*italic*` / `` `code` `` / `[text](url)`). Unsupported syntax is dropped with a warning surfaced in the tool result. Body is bounded at 50 KB; per-block rich-text runs are split at Notion's 2000-character limit; the `pages.create` 100-child cap is handled with chunked `blocks.children.append`.
 
 #### Sync sources
 
-None. The Inbox is a write-only destination — `pushToClient` creates one page per tool invocation against a data source the client owns. No managed sync writes here.
+None. These are write-only destinations — `pushToClient` creates one page per tool invocation against the data source the client owns. No managed sync writes here.
 
 #### Client onboarding
 
-See `workers/push-to-client/README.md` for the five-step onboarding checklist the client follows to create the internal integration, clone the Inbox template, and grant access.
+See `workers/push-to-client/README.md` for the onboarding checklist: clone the three destination databases from the canonical template, add `Brain ID` rich_text to each, create an internal integration with Read/Update/Insert + Read-user-emails capabilities, share each destination DB with that integration, hand us the token + the three database urls, and we wire the env.
 
 ### `Slack Channels` (managed by `workers/ingest-slack`)
 

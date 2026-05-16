@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# End-to-end smoke for the pushToClient tool. Requires a staging client to be
-# configured in `.env` (or via `ntn workers env set` for non-local runs).
+# End-to-end smoke for the pushToClient tool, one case per docType + the
+# idempotency rerun + a negative for unknown-status. Requires a staging
+# client to be configured in `.env` (or via `ntn workers env set` for non-local
+# runs).
 #
 # Usage:
 #   CLIENT_ID=<id> ./test.sh            # local; uses .env automatically
@@ -17,61 +19,59 @@ exec_tool() {
 	ntn workers exec pushToClient ${LOCAL_FLAG} -d "$1"
 }
 
-echo "=== 1) Healthy create ==="
+echo "=== 1) Healthy create — Docs ==="
 exec_tool "{
 	\"clientId\": \"${CLIENT_ID}\",
-	\"payload\": {
-		\"brainId\": \"smoke-1\",
-		\"title\": \"[Smoke] push-to-client healthy create\",
-		\"source\": \"Fireflies\",
-		\"category\": \"summary\",
-		\"originalDate\": \"2026-05-16T18:00:00.000Z\",
-		\"originUrl\": \"https://example.com/origin\",
-		\"bodyMarkdown\": \"# Smoke\\n\\nParagraph.\\n\\n- bullet 1\\n- bullet 2\\n\\n\`\`\`ts\\nconsole.log(1);\\n\`\`\`\"
-	}
+	\"docType\": \"Docs\",
+	\"brainId\": \"smoke-doc-1\",
+	\"title\": \"[Smoke] push-to-client Doc\",
+	\"type\": \"Guide\",
+	\"status\": \"Drafting\",
+	\"bodyMarkdown\": \"# Smoke Doc\\n\\nParagraph one.\\n\\n- bullet 1\\n- bullet 2\"
 }"
 
-echo "=== 2) Idempotency (same brainId returns already_pushed) ==="
+echo "=== 2) Healthy create — Status Update ==="
 exec_tool "{
 	\"clientId\": \"${CLIENT_ID}\",
-	\"payload\": {
-		\"brainId\": \"smoke-1\",
-		\"title\": \"[Smoke] push-to-client healthy create\",
-		\"source\": \"Fireflies\",
-		\"category\": \"summary\",
-		\"originalDate\": \"2026-05-16T18:00:00.000Z\",
-		\"originUrl\": \"https://example.com/origin\",
-		\"bodyMarkdown\": \"# Smoke\\n\\nParagraph.\"
-	}
+	\"docType\": \"StatusUpdate\",
+	\"brainId\": \"smoke-su-1\",
+	\"title\": \"[Smoke] Status Update @Next Monday\",
+	\"date\": \"2026-05-18\",
+	\"summary\": \"Hello world from the smoke test.\",
+	\"presenterEmail\": null,
+	\"addressed\": false
 }"
 
-echo "=== 3) Markdown warnings (image + table dropped) ==="
+echo "=== 3) Healthy create — Deliverable (date range) ==="
 exec_tool "{
 	\"clientId\": \"${CLIENT_ID}\",
-	\"payload\": {
-		\"brainId\": \"smoke-warnings-1\",
-		\"title\": \"[Smoke] markdown warnings\",
-		\"source\": \"Slack\",
-		\"category\": \"summary\",
-		\"originalDate\": null,
-		\"originUrl\": null,
-		\"bodyMarkdown\": \"![cat](https://example.com/cat.png)\\n\\n| a | b |\\n| - | - |\\n| 1 | 2 |\"
-	}
+	\"docType\": \"Deliverable\",
+	\"brainId\": \"smoke-deliv-1\",
+	\"title\": \"[Smoke] Aduro Home\",
+	\"status\": \"Planning\",
+	\"timelineStart\": \"2026-05-15\",
+	\"timelineEnd\": \"2026-06-30\"
 }"
 
-echo "=== 4) Unknown category (should throw DestinationSchemaMismatch) ==="
+echo "=== 4) Idempotency — re-push the Doc, expect already_pushed ==="
+exec_tool "{
+	\"clientId\": \"${CLIENT_ID}\",
+	\"docType\": \"Docs\",
+	\"brainId\": \"smoke-doc-1\",
+	\"title\": \"[Smoke] push-to-client Doc (rerun)\",
+	\"type\": \"Guide\",
+	\"status\": \"Drafting\"
+}"
+
+echo "=== 5) Unknown status (should throw DestinationSchemaMismatch) ==="
 set +e
 exec_tool "{
 	\"clientId\": \"${CLIENT_ID}\",
-	\"payload\": {
-		\"brainId\": \"smoke-bad-category-1\",
-		\"title\": \"[Smoke] unknown category\",
-		\"source\": \"Fireflies\",
-		\"category\": \"definitely-not-a-real-category\",
-		\"originalDate\": null,
-		\"originUrl\": null,
-		\"bodyMarkdown\": null
-	}
+	\"docType\": \"Docs\",
+	\"brainId\": \"smoke-bad-status-1\",
+	\"title\": \"[Smoke] unknown status\",
+	\"type\": \"Guide\",
+	\"status\": \"DefinitelyNotAStatus\"
 }"
 set -e
 
