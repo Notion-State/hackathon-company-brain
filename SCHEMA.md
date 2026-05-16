@@ -178,6 +178,117 @@ None. The Inbox is a write-only destination — `pushToClient` creates one page 
 
 See `workers/push-to-client/README.md` for the five-step onboarding checklist the client follows to create the internal integration, clone the Inbox template, and grant access.
 
+### `Slack Channels` (managed by `workers/ingest-slack`)
+
+Holds one row per public, non-shared channel in the configured Slack workspace. Primary key is the bare Slack channel id (e.g., `C01234ABC`), which is also the value the `Slack Messages` DB's `Channel` relation references.
+
+Discovered each cycle of `slackChannelsSync` via `conversations.list(types: public_channel, exclude_archived: true)`, filtered to `!is_shared && !is_ext_shared && !is_private`. Archived channels are mark-and-swept by replace mode (not retained in v1).
+
+| Property | Type | Source nullable? | Source / fallback |
+|---|---|---|---|
+| `Name` | title | no | `#${channel.name}`. Fallback: `"#unknown"`. |
+| `Channel ID` | rich_text | no | **Primary key.** Bare Slack channel id (`C01234ABC`). |
+| `Topic` | rich_text | yes | `channel.topic.value`, markdown-escaped, clipped at 2000 chars. Empty when unset. |
+| `Purpose` | rich_text | yes | `channel.purpose.value`, markdown-escaped, clipped at 2000 chars. Empty when unset. |
+| `Member Count` | number | yes | `channel.num_members`. Fallback: `0`. |
+| `Is Member` | checkbox | no | `channel.is_member` after auto-join attempt. False on channels where join failed (e.g. `not_authorized`); the row is still written so the operator can see why ingest is stalled. |
+| `Is Archived` | checkbox | no | `channel.is_archived`. Always `false` in v1 because `exclude_archived: true` filters them out at the list call; the property is kept for forward-compat. |
+| `Created` | date (datetime) | yes | `new Date(channel.created * 1000).toISOString()` (Slack returns epoch seconds). Fallback: sync run timestamp. |
+| `Creator Email` | email | yes | `users.info(channel.creator).profile.email` via the shared identity cache. Empty for bot-created channels, when `users:read.email` is denied, or when the creator can't be resolved. |
+| `Internal Creator` | people | yes | `Builder.people(creatorEmail)` when `creatorEmail` matches `INTERNAL_DOMAINS` (hardcoded `notionstate.com`). Empty otherwise. |
+| `Slack URL` | url | no | `https://${team.domain}.slack.com/archives/${channelId}`. `team.domain` from a one-time `team.info` call at module init (cached). Falls back to `app.slack.com/archives/...` if `team.info` fails. |
+| `Source` | select | no | Hardcoded `"Slack"`. |
+| `Synced At` | date (datetime) | no | Wall-clock timestamp at sync run. |
+
+#### Page body (`pageContentMarkdown`)
+
+```
+# {Name}
+
+**Members:** {Member Count}  |  **Created:** {Created}  |  **Created by:** {Creator display name (@handle)}
+
+**Topic:** {Topic, or "_No topic set._"}
+
+**Purpose:** {Purpose, or "_No purpose set._"}
+
+[Open in Slack]({Slack URL})
+```
+
+#### Sync sources
+
+| Sync key | Mode | Schedule | Purpose |
+|---|---|---|---|
+| `slackChannelsSync` | `replace` | `1h` | Discovers eligible channels, auto-joins via `conversations.join` where `is_member: false`, writes one row per channel. Replace-mode mark-and-sweep deletes channels archived/removed since the last cycle. Reuses the identity cache for `Creator Email`. |
+
+### `Slack Messages` (managed by `workers/ingest-slack`)
+
+Holds one row per top-level Slack thread (i.e., one row per parent message). Replies render into the page body — they do not get their own rows. Primary key is composite `Record ID = ${channelId}:${threadTs}`; Slack `ts` is microsecond-precise and globally unique within a tenant, but the channel prefix protects against any cross-channel collision and reserves room for a future `${workspaceId}:` prefix without re-keying.
+
+Bot messages are included as first-class authors (rendered as `{botName} (bot)`). System events (`channel_join`, `pinned_item`, `channel_topic`, etc.) and tombstones (deleted parents) are filtered out by `src/system-events.ts` / `src/threads.ts`.
+
+| Property | Type | Source nullable? | Source / fallback |
+|---|---|---|---|
+| `Title` | title | yes | First ~80 chars of parent message text (whitespace collapsed, ellipsized). Fallback: `"[Message in #${channel.name}]"`. |
+| `Record ID` | rich_text | no | **Primary key.** `${channelId}:${threadTs}`. |
+| `Channel` | relation → `slack-channels-v1` (two-way, back-ref `"Threads"`) | no | `[Builder.relation(channelId)]`. The referenced primary key equals the `Slack Channels` row's `Channel ID`. Notion auto-maintains a `Threads` property on the Channels row listing every thread in that channel — no emission from this sync required. |
+| `Author` | rich_text | no | For humans: `"Real Name (@handle)"` via `users.info`. For bots: `"{botName \|\| username} (bot)"`. Fallback: `"(unknown)"`. |
+| `Author Email` | email | yes | From `users.info` for humans; empty for bots. |
+| `Internal Participants` | people | yes | All distinct emails seen in the thread (parent + replies) whose domain matches `INTERNAL_DOMAINS`. Passed to `Builder.people(...emails)`; Notion resolves to workspace users at sync time and silently drops non-matches. Mirrors fireflies' `Notion State Attendees` pattern. |
+| `Thread Participants` | rich_text | yes | Comma-joined unique display names across parent + replies. Clipped at 2000 chars. |
+| `Posted At` | date (datetime) | no | Parent `ts` → ISO datetime via `slackTsToIso`. |
+| `Last Activity` | date (datetime) | no | `max(parent.ts, ...replies[].ts)` → ISO. **Drives the per-channel delta cursor.** |
+| `Reply Count` | number | no | Count of non-system-event replies after filtering. |
+| `Reaction Count` | number | no | Sum of `reactions[].count` across parent + all replies. Captured at write time; the delta refreshes this when it re-fetches a thread (because `conversations.replies` returns reactions), but threads with no new activity drift between backfills. |
+| `Has Attachments` | checkbox | no | True if any message in the thread has non-empty `files[]` or any `attachments[]`. |
+| `Permalink` | url | yes | From `chat.getPermalink(channel, message_ts=parentTs)`. Empty if the call returns `message_not_found` / `channel_not_found`. |
+| `Source` | select | no | Hardcoded `"Slack"`. |
+| `Synced At` | date (datetime) | no | Wall-clock timestamp at sync run. |
+
+#### Page body (`pageContentMarkdown`)
+
+```
+# {Title}
+
+**Channel:** #{channel.name}  |  **Posted:** {Posted At}  |  **Replies:** {Reply Count}
+**Author:** {Author}
+**Participants:** {Thread Participants, or "_None_"}
+
+[View in Slack]({Permalink})   ← only when Permalink is present
+
+## Thread
+
+**{Author} — {ts ISO}**
+{parent text, mrkdwn→commonmark converted}
+
+- 📎 [{filename}]({slack file url})   ← only when attachments present
+
+**{Reply Author} — {reply ts ISO}**
+{reply text}
+
+…
+```
+
+Slack mrkdwn → commonmark (`src/render-threads.ts:convertSlackMrkdwn`): user mentions resolve via the identity cache (`<@U…>` → `@handle`, unknown → `@user`); channel mentions become `#name` (or `#${channelId}` when no inline name); user-group mentions `<!subteam^…|name>` → `@name`; `<!here>`/`<!channel>`/`<!everyone>` → `@here`/`@channel`/`@everyone`; `<url|label>` → `[label](url)`; bare `<url>` → `url`; Slack HTML entities (`&lt;`/`&gt;`/`&amp;`) unescaped; `*bold*`/`_italic_`/`~strike~` → `**bold**`/`*italic*`/`~~strike~~` (with word-boundary heuristics so `file_name_here` isn't misread as italic).
+
+The converted message text is **not** subsequently markdown-escaped — escaping would break the `[label](url)` links the conversion just produced. The structural template around it (header, metadata, permalink line) does use our own escaped strings, so structural integrity of the page is preserved even if a user injects markdown into their message. No XSS surface (Notion blocks aren't HTML).
+
+#### Sync sources
+
+| Sync key | Mode | Schedule | Purpose |
+|---|---|---|---|
+| `slackBackfill` | `replace` | `manual` | Re-discovers eligible channels (skipping non-member channels — `slackChannelsSync` owns the join). Per channel, paginates `conversations.history` from `now - SLACK_BACKFILL_DAYS`. For each top-level message with `reply_count > 0`, follows `conversations.replies` for the full thread. Replace mode mark-and-sweeps threads no longer present. Refreshes reactions on every thread. Trigger after deploy and whenever you want to clean up drift. |
+| `slackDelta` | `incremental` | `5m` | Per-channel `lastActivityTs` cursor (Slack ts string) with a **60-second consistency buffer**. Re-discovers channels each cycle so newly-joined channels start picking up activity quickly. Refetches `conversations.replies` for any thread whose `latest_reply > cursor`. Does not pick up deletes (backfill's job). |
+
+#### Known limitations
+
+- **Backfill window is hard.** Threads with parent older than `SLACK_BACKFILL_DAYS` are not pulled, even if they have recent activity.
+- **Edits to messages older than the delta window are not seen.** `conversations.history` filters by parent `ts`, not `edited.ts`. Backfill catches them.
+- **No real-time deletes.** A deleted Slack message sticks in Notion until the next messages backfill.
+- **Reactions drift between backfills** for threads with no new activity.
+- **Auto-join is visible** ("X has joined the channel" — no API to suppress).
+- **New-channel latency** ≤ 1h + 5min (next channels sync joins, next delta picks up).
+- **Polling only**; Slack Events API deferred.
+
 ## Adding a new database
 
 When you add a managed Notion database in a worker, append a section to this file with:
