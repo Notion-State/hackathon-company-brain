@@ -17,9 +17,9 @@ export const transcriptShort: Transcript = {
 		{ name: "Alice" }, // duplicate — should dedupe
 	],
 	sentences: [
-		{ speaker_name: "Alice", text: "Hey Bob, welcome aboard.", start_time: 0 },
-		{ speaker_name: "Bob", text: "Thanks Alice — excited to dive in.", start_time: 3 },
-		{ speaker_name: "Alice", text: "Let's start with permissions next week.", start_time: 7 },
+		{ speaker_name: "Alice", text: "Hey Bob, welcome aboard.", start_time: 0, end_time: 2.5 },
+		{ speaker_name: "Bob", text: "Thanks Alice — excited to dive in.", start_time: 3, end_time: 6 },
+		{ speaker_name: "Alice", text: "Let's start with permissions next week.", start_time: 7, end_time: 10.5 },
 	],
 	summary: {
 		overview: "Alice welcomed Bob and outlined next-week onboarding tasks.",

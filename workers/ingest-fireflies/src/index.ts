@@ -3,6 +3,8 @@ import * as Schema from "@notionhq/workers/schema";
 
 import { getFirefliesAccounts, type Account } from "./accounts.js";
 import { createFirefliesClient, type FirefliesClient, type Transcript } from "./fireflies.js";
+import { parseInternalDomains } from "./internal-domains.js";
+import { getCompaniesLookup, type CompaniesLookup } from "./lookups.js";
 import { renderTranscriptMarkdown, toChangeProperties } from "./render.js";
 import {
 	advanceBackfillState,
@@ -30,6 +32,12 @@ const BACKFILL_DAYS = clampInt(process.env.FIREFLIES_BACKFILL_DAYS, { fallback: 
  * anything still missed.
  */
 const CONSISTENCY_BUFFER_MS = 60 * 60 * 1000;
+
+// Project-specific constants. Hardcoded rather than env-driven because they
+// don't change across environments and we don't want a deploy-time misconfig
+// to silently disable Internal/External classification or the Companies lookup.
+const INTERNAL_DOMAINS = parseInternalDomains("notionstate.com");
+const COMPANIES_DATABASE_ID = "89e2a2f0-e4e9-437a-991b-4b551e9c26a6";
 
 // ---- Module-init: accounts → pacers + clients ----
 
@@ -62,19 +70,31 @@ const transcriptsDb = worker.database("transcripts", {
 	primaryKeyProperty: "Record ID",
 	schema: {
 		properties: {
-			Title: Schema.title(),
+			"Meeting Title": Schema.title(),
 			"Record ID": Schema.richText(),
-			"Transcript ID": Schema.richText(),
+			"Fireflies Meeting ID": Schema.richText(),
 			Account: Schema.select(accountIds.map((id) => ({ name: id }))),
 			"Meeting Date": Schema.date(),
 			"Duration (min)": Schema.number(),
-			Host: Schema.email(),
+			"Internal/External": Schema.select([
+				{ name: "Internal", color: "blue" },
+				{ name: "External", color: "orange" },
+			]),
+			Summary: Schema.richText(),
+			Keywords: Schema.richText(),
 			Attendees: Schema.richText(),
+			"Attendee Count": Schema.number(),
+			"Participant Emails": Schema.richText(),
 			// richText (comma-separated) rather than multi_select: avoids needing
 			// to pre-declare speaker names as select options, which is impossible
 			// at module init.
 			Speakers: Schema.richText(),
+			"Notion State Attendees": Schema.people(),
+			"NS Talk %": Schema.number("percent"),
+			Companies: Schema.richText(),
+			"Company Domains": Schema.richText(),
 			"Transcript URL": Schema.url(),
+			"Recording Status": Schema.select([{ name: "Transcribed", color: "green" }]),
 			Source: Schema.select([{ name: "Fireflies" }]),
 			"Synced At": Schema.date(),
 		},
@@ -87,11 +107,12 @@ worker.sync("firefliesBackfill", {
 	database: transcriptsDb,
 	mode: "replace",
 	schedule: "manual",
-	execute: async (rawState) => {
+	execute: async (rawState, { notion }) => {
 		const state = initBackfillState(rawState as BackfillState, accountIds, BACKFILL_DAYS, new Date());
 		if (state.pendingAccountIds.length === 0) {
 			return { changes: [], hasMore: false };
 		}
+		const companies = await getCompaniesLookup({ notion, companiesDatabaseId: COMPANIES_DATABASE_ID });
 
 		const activeAccountId = state.pendingAccountIds[0]!;
 		const { client, pacer } = perAccount[activeAccountId]!;
@@ -104,7 +125,7 @@ worker.sync("firefliesBackfill", {
 		});
 
 		const transcripts = await fetchAllDetails(client, pacer, page.ids);
-		const changes = transcripts.map((t) => toUpsertChange(t, activeAccountId));
+		const changes = transcripts.map((t) => toUpsertChange(t, activeAccountId, companies));
 
 		const nextState = advanceBackfillState(state, page.hasMore);
 		return {
@@ -121,13 +142,14 @@ worker.sync("firefliesDelta", {
 	database: transcriptsDb,
 	mode: "incremental",
 	schedule: "5m",
-	execute: async (rawState) => {
+	execute: async (rawState, { notion }) => {
 		const now = new Date();
 		const state = initDeltaState(rawState as DeltaState, accountIds, BACKFILL_DAYS, now);
 
 		if (!state.cycle || state.cycle.pendingAccountIds.length === 0) {
 			return { changes: [], hasMore: false, nextState: state };
 		}
+		const companies = await getCompaniesLookup({ notion, companiesDatabaseId: COMPANIES_DATABASE_ID });
 
 		const activeAccountId = state.cycle.pendingAccountIds[0]!;
 		const { client, pacer } = perAccount[activeAccountId]!;
@@ -141,7 +163,7 @@ worker.sync("firefliesDelta", {
 		});
 
 		const transcripts = await fetchAllDetails(client, pacer, page.ids);
-		const changes = transcripts.map((t) => toUpsertChange(t, activeAccountId));
+		const changes = transcripts.map((t) => toUpsertChange(t, activeAccountId, companies));
 
 		const nextState = advanceDeltaState(state, page.hasMore, page.latestDate, now, CONSISTENCY_BUFFER_MS);
 		const hasMore = nextState.cycle !== undefined && nextState.cycle.pendingAccountIds.length > 0;
@@ -174,11 +196,11 @@ async function fetchAllDetails(
 	return transcripts;
 }
 
-function toUpsertChange(t: Transcript, accountId: string) {
+function toUpsertChange(t: Transcript, accountId: string, companies: CompaniesLookup) {
 	return {
 		type: "upsert" as const,
 		key: `${accountId}:${t.id}`,
-		properties: toChangeProperties(t, accountId),
+		properties: toChangeProperties(t, accountId, INTERNAL_DOMAINS, companies),
 		pageContentMarkdown: renderTranscriptMarkdown(t),
 	};
 }

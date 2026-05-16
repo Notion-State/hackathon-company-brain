@@ -10,6 +10,7 @@ function buildSentences(count: number): Sentence[] {
 			speaker_name: speaker,
 			text: `Utterance number ${i + 1} from ${speaker}. Discussing item ${Math.floor(i / 4) + 1}.`,
 			start_time: i * 7,
+			end_time: i * 7 + 6,
 		});
 	}
 	return out;

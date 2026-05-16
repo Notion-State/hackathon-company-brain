@@ -17,7 +17,10 @@ Both write to the same database (`Meeting Transcripts`). Primary key is composit
 |---|---|---|---|
 | `FIREFLIES_API_KEY` | yes (or a `FIREFLIES_API_KEY_<ID>` variant) | — | Default account's API key. Get it from [Fireflies → Integrations → Custom Fireflies](https://app.fireflies.ai/integrations/custom/fireflies). |
 | `FIREFLIES_BACKFILL_DAYS` | no | `30` | How far back the backfill (and first-run delta cursor) reaches. Clamped to [1, 3650]. |
+| `NOTION_API_TOKEN` | required for `Companies` column | — | Internal-integration token. Create at [Notion integrations](https://www.notion.so/profile/integrations/internal); grant access to the Meeting Transcripts DB *and* the Companies DB. Without it, the `Companies` column stays empty but the sync still runs. (Sync capabilities are not pre-authenticated by the workers platform; only tool capabilities invoked by Custom Agents get an automatic token.) |
 | `FIREFLIES_API_KEY_<ID>` | no | — | Additional Fireflies accounts. The `<ID>` becomes the account id (lowercased). Example: `FIREFLIES_API_KEY_ACME` → account id `acme`. |
+
+`INTERNAL_DOMAINS` (`notionstate.com`) and the Companies database id are hardcoded in `src/index.ts` — they aren't expected to change and locking them in keeps a deploy-time misconfig from silently disabling the Internal/External classification or the Companies lookup.
 
 See `.env.example`.
 
@@ -81,7 +84,9 @@ ntn workers sync status
 | `src/index.ts` | Worker entry point: declares the database, per-account pacers + clients, backfill sync, delta sync. |
 | `src/accounts.ts` | Enumerates accounts from env (`FIREFLIES_API_KEY[_<ID>]`). Pure / tested. |
 | `src/fireflies.ts` | GraphQL client factory `createFirefliesClient(apiKey)`. Pure / tested. |
-| `src/render.ts` | Transcript → markdown body + change-record properties. Pure / tested. |
+| `src/internal-domains.ts` | `INTERNAL_DOMAINS` parsing + email-domain helpers. Pure / tested. |
+| `src/lookups.ts` | Lazy-cached Companies DB lookup (domain → company name). Tested with stub Notion client. |
+| `src/render.ts` | Transcript → markdown body + change-record properties (including `NS Talk %` computation). Pure / tested. |
 | `src/sync-state.ts` | Pure state-machine helpers for backfill and delta cycles. Tested. |
 | `src/fixtures/` | Hand-built transcript samples used by tests. |
 

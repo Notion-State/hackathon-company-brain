@@ -5,6 +5,11 @@
 
 import * as Builder from "@notionhq/workers/builder";
 import type { Transcript } from "./fireflies.js";
+import { extractDomain, isInternal } from "./internal-domains.js";
+import type { CompaniesLookup } from "./lookups.js";
+
+/** Notion rich_text per-text-element cap. Long summaries must be sliced. */
+const RICH_TEXT_MAX = 2000;
 
 /**
  * Builds the composite primary key. Two accounts that both see a shared
@@ -45,6 +50,24 @@ function attendeeNames(t: Transcript): string[] {
 	return out;
 }
 
+function attendeeEmails(t: Transcript): string[] {
+	const out: string[] = [];
+	for (const a of t.meeting_attendees ?? []) {
+		const email = a.email?.trim();
+		if (email) out.push(email);
+	}
+	return out;
+}
+
+function uniqueAttendeeDomains(t: Transcript): string[] {
+	const seen = new Set<string>();
+	for (const email of attendeeEmails(t)) {
+		const d = extractDomain(email);
+		if (d) seen.add(d);
+	}
+	return [...seen];
+}
+
 function speakerNames(t: Transcript): string[] {
 	const seen = new Set<string>();
 	const out: string[] = [];
@@ -70,6 +93,42 @@ function normalizeActionItems(items: string | string[] | null | undefined): stri
 function normalizeKeywords(keywords: string[] | null | undefined): string[] {
 	if (!keywords) return [];
 	return keywords.map((k) => k.trim()).filter(Boolean);
+}
+
+/** Build a lowercase displayName → email map for sentence-speaker lookup. */
+function attendeeEmailByName(t: Transcript): Map<string, string> {
+	const out = new Map<string, string>();
+	for (const a of t.meeting_attendees ?? []) {
+		const name = a.displayName?.trim().toLowerCase();
+		const email = a.email?.trim();
+		if (name && email) out.set(name, email);
+	}
+	return out;
+}
+
+/**
+ * Compute the fraction of meeting talk time spent by internal speakers.
+ * Returns 0 when no sentences carry usable timings.
+ *
+ * Speakers are matched to attendees by displayName (Fireflies' `speaker_name`
+ * is the attendee's display name in practice). Sentences whose speaker can't
+ * be matched count toward total time but not toward NS time.
+ */
+export function nsTalkPercent(t: Transcript, internalDomains: Set<string>): number {
+	const byName = attendeeEmailByName(t);
+	let total = 0;
+	let ns = 0;
+	for (const s of t.sentences ?? []) {
+		if (s.start_time == null || s.end_time == null) continue;
+		const dur = s.end_time - s.start_time;
+		if (!Number.isFinite(dur) || dur <= 0) continue;
+		total += dur;
+		const speaker = s.speaker_name?.trim().toLowerCase();
+		const email = speaker ? byName.get(speaker) : undefined;
+		if (email && isInternal(email, internalDomains)) ns += dur;
+	}
+	if (total <= 0) return 0;
+	return ns / total;
 }
 
 /**
@@ -137,35 +196,71 @@ export function renderTranscriptMarkdown(t: Transcript): string {
  * Build the Notion property map for a change record.
  *
  * The SDK's `SyncChangeUpsert` type requires every schema-declared property to
- * appear in every change record (a strict mapped type over `keyof Schema`).
- * So we always emit every property; missing source values get a typed empty
- * fallback (empty string for text/url/email, `now` for dates, 0 for number)
- * rather than being omitted.
+ * appear in every change record (strict mapped type). All properties below are
+ * emitted unconditionally; missing source values get a typed empty fallback.
  */
-export function toChangeProperties(t: Transcript, accountId: string, now: Date = new Date()) {
+export function toChangeProperties(
+	t: Transcript,
+	accountId: string,
+	internalDomains: Set<string>,
+	companies: CompaniesLookup,
+	now: Date = new Date(),
+) {
 	const title = t.title?.trim() || "Untitled meeting";
 	const composite = recordId(accountId, t.id);
 	const mins = durationMinutes(t.duration);
 	const speakers = speakerNames(t);
-	const attendees = attendeeNames(t);
-	const hostEmail = t.host_email?.trim();
-	const validHostEmail = hostEmail && /.+@.+\..+/.test(hostEmail) ? hostEmail : "";
+	const attendeeDisplayNames = attendeeNames(t);
+	const emails = attendeeEmails(t);
+	const domains = uniqueAttendeeDomains(t);
+	const internalEmails = emails.filter((e) => isInternal(e, internalDomains));
+
+	// Internal/External: every attendee internal → Internal; otherwise External.
+	// Empty attendee list → External (defensive — meetings with no captured
+	// attendees default to the more permissive bucket downstream).
+	const allInternal = emails.length > 0 && emails.every((e) => isInternal(e, internalDomains));
+	const internalExternal = allInternal ? "Internal" : "External";
+
+	const overview = t.summary?.overview?.trim() ?? "";
+	const summaryText = overview.length > RICH_TEXT_MAX ? overview.slice(0, RICH_TEXT_MAX - 1) + "…" : overview;
+	const keywordsText = normalizeKeywords(t.summary?.keywords).join(", ");
+
 	// Defense in depth: the client normalizes Fireflies' epoch-ms `date` to ISO,
 	// but if any non-string slips through, fall back to `now` so Builder.dateTime
 	// never sees a number it'd reject.
 	const meetingDateIso = typeof t.date === "string" && t.date.length > 0 ? t.date : now.toISOString();
 
+	// Companies: dedupe matched names; preserves order of first appearance.
+	const seenCompanies = new Set<string>();
+	const companyNames: string[] = [];
+	for (const d of domains) {
+		const name = companies.companyNameByDomain(d);
+		if (name && !seenCompanies.has(name)) {
+			seenCompanies.add(name);
+			companyNames.push(name);
+		}
+	}
+
 	return {
-		Title: Builder.title(title),
+		"Meeting Title": Builder.title(title),
 		"Record ID": Builder.richText(composite),
-		"Transcript ID": Builder.richText(t.id),
+		"Fireflies Meeting ID": Builder.richText(t.id),
 		Account: Builder.select(accountId),
 		"Meeting Date": Builder.dateTime(meetingDateIso),
 		"Duration (min)": Builder.number(mins ?? 0),
-		Host: Builder.email(validHostEmail),
-		Attendees: Builder.richText(attendees.join(", ")),
+		"Internal/External": Builder.select(internalExternal),
+		Summary: Builder.richText(summaryText),
+		Keywords: Builder.richText(keywordsText),
+		Attendees: Builder.richText(attendeeDisplayNames.join(", ")),
+		"Attendee Count": Builder.number(emails.length),
+		"Participant Emails": Builder.richText(emails.join(", ")),
 		Speakers: Builder.richText(speakers.join(", ")),
+		"Notion State Attendees": Builder.people(...internalEmails),
+		"NS Talk %": Builder.number(nsTalkPercent(t, internalDomains)),
+		Companies: Builder.richText(companyNames.join(", ")),
+		"Company Domains": Builder.richText(domains.join(", ")),
 		"Transcript URL": Builder.url(t.transcript_url ?? ""),
+		"Recording Status": Builder.select("Transcribed"),
 		Source: Builder.select("Fireflies"),
 		"Synced At": Builder.dateTime(now.toISOString()),
 	};

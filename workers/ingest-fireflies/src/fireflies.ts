@@ -12,6 +12,7 @@ export type Sentence = {
 	speaker_name: string | null;
 	text: string;
 	start_time: number | null;
+	end_time: number | null;
 };
 
 export type Speaker = {
@@ -116,6 +117,7 @@ const TRANSCRIPT_QUERY = /* GraphQL */ `
 				speaker_name
 				text
 				start_time
+				end_time
 			}
 			summary {
 				overview
