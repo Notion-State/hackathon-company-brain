@@ -21,7 +21,13 @@
 
 import * as Builder from "@notionhq/workers/builder";
 
-import type { GraphQLResult, OEmbedResult, SharePageResult, TranscriptCue } from "./loom.js";
+import type {
+	GraphQLResult,
+	OEmbedResult,
+	SharePageResult,
+	TranscriptCue,
+	TranscriptResult,
+} from "./loom.js";
 import type { SourceVideoRow } from "./source-db.js";
 
 /** Notion rich_text per-text-element cap. */
@@ -35,6 +41,7 @@ export type ComposeInput = {
 	oembed: OEmbedResult;
 	scrape: SharePageResult;
 	graphql: GraphQLResult;
+	transcript: TranscriptResult;
 	now: Date;
 };
 
@@ -62,7 +69,6 @@ export function toChangeProperties(input: ComposeInput) {
 		"Owner Email": Builder.email(merged.ownerEmail ?? ""),
 		"Upload Date": Builder.dateTime(uploadDateIso),
 		Description: Builder.richText(truncate(merged.description ?? "", RICH_TEXT_MAX)),
-		"View Count": Builder.number(merged.viewCount ?? 0),
 		"Comment Count": Builder.number(merged.commentCount ?? 0),
 		"Sync Status": Builder.select(status),
 		"Last Enriched At": Builder.dateTime(input.now.toISOString()),
@@ -88,7 +94,6 @@ export function composeEnrichment(input: ComposeInput): ComposeOutput {
 		ownerEmail: merged.ownerEmail,
 		uploadDate: merged.uploadDate,
 		durationSeconds: merged.durationSeconds,
-		viewCount: merged.viewCount,
 		commentCount: merged.commentCount,
 		sourcePageUrl: input.source.pageUrl,
 		videoUrl: input.source.videoUrl,
@@ -121,22 +126,30 @@ type MergedFields = {
 	ownerEmail: string | null;
 	uploadDate: string | null;
 	description: string | null;
-	viewCount: number | null;
 	commentCount: number | null;
 	transcript: TranscriptCue[] | null;
 };
 
 export function mergeFields(input: ComposeInput): MergedFields {
-	const { oembed, scrape, graphql } = input;
+	const { oembed, scrape, graphql, transcript } = input;
 	const oembedOk = oembed.status === "ok" ? oembed : null;
 	const scrapeOk = scrape.status === "ok" ? scrape : null;
 	const graphqlOk = graphql.status === "ok" ? graphql : null;
+	const transcriptOk = transcript.status === "ok" ? transcript : null;
 
 	// Title fallback ladder: oEmbed → OG/JSON-LD → static.
 	const title =
 		oembedOk?.title?.trim() ||
 		scrapeOk?.title?.trim() ||
 		"Untitled Loom video";
+
+	// Description fallback ladder: GraphQL → OG/JSON-LD. GraphQL preserves
+	// the unabridged description (including newlines) and the meta fields
+	// are condensed previews; prefer the richer source when available.
+	const description =
+		graphqlOk?.description?.trim() ||
+		scrapeOk?.description ||
+		null;
 
 	return {
 		title,
@@ -145,10 +158,9 @@ export function mergeFields(input: ComposeInput): MergedFields {
 		ownerName: graphqlOk?.ownerName ?? oembedOk?.authorName ?? null,
 		ownerEmail: graphqlOk?.ownerEmail ?? null,
 		uploadDate: scrapeOk?.uploadDate ?? graphqlOk?.createdAt ?? null,
-		description: scrapeOk?.description ?? null,
-		viewCount: graphqlOk?.viewCount ?? null,
+		description,
 		commentCount: graphqlOk?.commentCount ?? null,
-		transcript: graphqlOk?.transcript ?? null,
+		transcript: transcriptOk?.cues ?? null,
 	};
 }
 
@@ -160,7 +172,6 @@ type RenderArgs = {
 	ownerEmail: string | null;
 	uploadDate: string | null;
 	durationSeconds: number | null;
-	viewCount: number | null;
 	commentCount: number | null;
 	sourcePageUrl: string;
 	videoUrl: string;
@@ -192,7 +203,6 @@ export function renderVideoMarkdown(args: RenderArgs): string {
 	if (metaPieces.length) parts.push(metaPieces.join("  |  "));
 
 	const statsPieces: string[] = [];
-	if (args.viewCount != null) statsPieces.push(`**Views:** ${args.viewCount}`);
 	if (args.commentCount != null) statsPieces.push(`**Comments:** ${args.commentCount}`);
 	if (statsPieces.length) parts.push(statsPieces.join("  |  "));
 

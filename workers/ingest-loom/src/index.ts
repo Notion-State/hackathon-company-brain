@@ -2,7 +2,12 @@ import { Worker } from "@notionhq/workers";
 import * as Schema from "@notionhq/workers/schema";
 
 import { composeEnrichment, toChangeProperties } from "./enrich.js";
-import { createLoomClient, parseVideoId, type LoomClient } from "./loom.js";
+import {
+	createLoomClient,
+	parseVideoId,
+	type LoomClient,
+	type TranscriptResult,
+} from "./loom.js";
 import { listVideoRows, type SourceVideoRow } from "./source-db.js";
 import {
 	advanceBackfillState,
@@ -40,13 +45,22 @@ const oembedPacer = worker.pacer("loom-oembed", { allowedRequests: 5, intervalMs
 const pagePacer = worker.pacer("loom-page", { allowedRequests: 3, intervalMs: 1000 });
 
 // GraphQL is undocumented; 2/sec keeps us well under whatever Loom's web client
-// trips. Shared between owner/engagement/transcript calls.
+// trips. Returns the signed CDN transcript URL alongside metadata.
 const graphqlPacer = worker.pacer("loom-graphql", { allowedRequests: 2, intervalMs: 1000 });
+
+// Signed CloudFront fetch for the transcript JSON. Separate from the page
+// scrape pacer because it's a different host (cdn.loom.com) with its own
+// limits and we want to tune it independently.
+const transcriptPacer = worker.pacer("loom-transcript", {
+	allowedRequests: 3,
+	intervalMs: 1000,
+});
 
 const loom: LoomClient = createLoomClient({
 	oembedPacer,
 	pagePacer,
 	graphqlPacer,
+	transcriptPacer,
 	enableGraphql: ENABLE_GRAPHQL,
 });
 
@@ -72,7 +86,6 @@ const loomVideosDb = worker.database("loom-videos-v1", {
 			"Owner Email": Schema.email(),
 			"Upload Date": Schema.date(),
 			Description: Schema.richText(),
-			"View Count": Schema.number(),
 			"Comment Count": Schema.number(),
 			"Sync Status": Schema.select([
 				{ name: "Enriched", color: "green" },
@@ -184,12 +197,23 @@ async function enrichRows(loom: LoomClient, rows: SourceVideoRow[], now: Date): 
 		const scrape = await loom.scrapeSharePage(row.videoUrl);
 		const graphql = videoId ? await loom.fetchGraphQL(videoId) : { status: "skipped" as const };
 
+		// Transcript is a second hop: GraphQL returns a signed CloudFront URL
+		// (~5 min expiry) and we immediately fetch the JSON before it lapses.
+		// Per-row ordering (not batched) is what keeps us inside the window.
+		let transcript: TranscriptResult = { status: "skipped", reason: "no-url" };
+		if (graphql.status === "ok" && graphql.transcriptUrl && graphql.transcriptStatus === "success") {
+			transcript = await loom.fetchTranscriptJson(graphql.transcriptUrl);
+		} else if (graphql.status === "ok" && graphql.transcriptStatus && graphql.transcriptStatus !== "success") {
+			transcript = { status: "skipped", reason: "status-not-success" };
+		}
+
 		const enriched = composeEnrichment({
 			source: row,
 			videoId,
 			oembed,
 			scrape,
 			graphql,
+			transcript,
 			now,
 		});
 

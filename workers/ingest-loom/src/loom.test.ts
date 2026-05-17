@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { GRAPHQL_ERROR, GRAPHQL_NO_CAPTIONS, GRAPHQL_OK } from "./fixtures/graphql-response.js";
+import {
+	GRAPHQL_ERROR,
+	GRAPHQL_OK,
+	GRAPHQL_PARTIAL_ERROR,
+	GRAPHQL_PRIVATE,
+	GRAPHQL_TRANSCRIPT_IN_PROGRESS,
+} from "./fixtures/graphql-response.js";
 import { OEMBED_OK } from "./fixtures/oembed-response.js";
 import {
 	SHARE_PAGE_FULL,
@@ -10,8 +16,14 @@ import {
 	SHARE_PAGE_REVERSED_META,
 } from "./fixtures/share-page-html.js";
 import {
+	TRANSCRIPT_EMPTY,
+	TRANSCRIPT_MALFORMED,
+	TRANSCRIPT_OK,
+} from "./fixtures/transcript-response.js";
+import {
 	createLoomClient,
 	normalizeGraphqlResponse,
+	normalizeTranscriptJson,
 	parseIso8601Duration,
 	parseSharePageHtml,
 	parseVideoId,
@@ -135,40 +147,103 @@ describe("parseSharePageHtml", () => {
 });
 
 describe("normalizeGraphqlResponse", () => {
-	it("normalizes a complete response", () => {
+	it("normalizes a complete composite response", () => {
 		const r = normalizeGraphqlResponse(GRAPHQL_OK);
 		if (r.status !== "ok") throw new Error("expected ok");
+		expect(r.videoVariant).toBe("RegularUserVideo");
 		expect(r.ownerName).toBe("Alex Lee");
 		expect(r.ownerEmail).toBe("alex@notionstate.com");
 		expect(r.createdAt).toBe("2026-04-12T15:30:00.000Z");
-		expect(r.viewCount).toBe(142);
 		expect(r.commentCount).toBe(3);
-		expect(r.transcript).toHaveLength(3);
-		expect(r.transcript![0]).toEqual({
-			startSeconds: 0,
-			text: "Hey team, quick walkthrough.",
-			speaker: "Alex Lee",
-		});
+		expect(r.description).toContain("Follow-up Q&A");
+		expect(r.transcriptStatus).toBe("success");
+		expect(r.transcriptUrl).toContain("https://cdn.loom.com/mediametadata/transcription/");
 	});
 
-	it("returns failed when the response carries errors", () => {
+	it("returns failed when the response has only top-level errors and no data", () => {
 		const r = normalizeGraphqlResponse(GRAPHQL_ERROR);
 		expect(r.status).toBe("failed");
 		if (r.status !== "failed") throw new Error("expected failed");
 		expect(r.error).toContain("Cannot query field");
 	});
 
-	it("returns ok with null transcript when captions are missing", () => {
-		const r = normalizeGraphqlResponse(GRAPHQL_NO_CAPTIONS);
+	it("returns ok with null transcriptUrl when fetchVideoTranscript is not ready", () => {
+		const r = normalizeGraphqlResponse(GRAPHQL_TRANSCRIPT_IN_PROGRESS);
 		if (r.status !== "ok") throw new Error("expected ok");
-		expect(r.transcript).toBeNull();
-		expect(r.viewCount).toBe(1);
+		expect(r.transcriptStatus).toBe("in_progress");
+		expect(r.transcriptUrl).toBeNull();
+		// Metadata still populated.
+		expect(r.ownerName).toBe("Solo");
+	});
+
+	it("tolerates partial data — getVideo ok, fetchVideoTranscript errored", () => {
+		const r = normalizeGraphqlResponse(GRAPHQL_PARTIAL_ERROR);
+		if (r.status !== "ok") throw new Error("expected ok");
+		expect(r.videoVariant).toBe("RegularUserVideo");
+		expect(r.ownerName).toBe("Zee");
+		expect(r.transcriptUrl).toBeNull();
+		expect(r.transcriptStatus).toBeNull();
+	});
+
+	it("maps PrivateVideo to ok with videoVariant=PrivateVideo and null metadata", () => {
+		const r = normalizeGraphqlResponse(GRAPHQL_PRIVATE);
+		if (r.status !== "ok") throw new Error("expected ok");
+		expect(r.videoVariant).toBe("PrivateVideo");
+		expect(r.ownerName).toBeNull();
+		expect(r.commentCount).toBeNull();
+		expect(r.description).toBeNull();
+		expect(r.transcriptUrl).toBeNull();
+	});
+
+	it("collapses an empty owner.email to null", () => {
+		// GRAPHQL_PARTIAL_ERROR has owner.email = "" — must surface as null.
+		const r = normalizeGraphqlResponse(GRAPHQL_PARTIAL_ERROR);
+		if (r.status !== "ok") throw new Error("expected ok");
+		expect(r.ownerEmail).toBeNull();
 	});
 
 	it("returns failed for non-object input", () => {
 		expect(normalizeGraphqlResponse(null).status).toBe("failed");
 		expect(normalizeGraphqlResponse(42).status).toBe("failed");
 		expect(normalizeGraphqlResponse({ no: "data" }).status).toBe("failed");
+	});
+});
+
+describe("normalizeTranscriptJson", () => {
+	it("maps phrases[] to TranscriptCue[] with trimmed text", () => {
+		const r = normalizeTranscriptJson(TRANSCRIPT_OK);
+		if (r.status !== "ok") throw new Error("expected ok");
+		expect(r.cues).toHaveLength(3);
+		expect(r.cues[0]).toEqual({
+			startSeconds: 0,
+			text: "Hey team, quick walkthrough.",
+		});
+		// Trimmed.
+		expect(r.cues[2]?.text).toBe("Let me show you what's changed.");
+		// No speaker field present in source JSON.
+		expect(r.cues[0]?.speaker).toBeUndefined();
+	});
+
+	it("returns skipped with reason empty-phrases when phrases is empty", () => {
+		const r = normalizeTranscriptJson(TRANSCRIPT_EMPTY);
+		if (r.status !== "skipped") throw new Error("expected skipped");
+		expect(r.reason).toBe("empty-phrases");
+	});
+
+	it("returns skipped when phrases items are all empty/invalid", () => {
+		const r = normalizeTranscriptJson({ phrases: [{ ts: 0 }, { value: "" }] });
+		expect(r.status).toBe("skipped");
+	});
+
+	it("treats a body missing phrases as skipped (transcript not present)", () => {
+		const r = normalizeTranscriptJson(TRANSCRIPT_MALFORMED);
+		if (r.status !== "skipped") throw new Error("expected skipped");
+		expect(r.reason).toBe("empty-phrases");
+	});
+
+	it("returns failed for non-object input", () => {
+		expect(normalizeTranscriptJson(null).status).toBe("failed");
+		expect(normalizeTranscriptJson("not json").status).toBe("failed");
 	});
 });
 
@@ -185,6 +260,7 @@ describe("createLoomClient — oEmbed status mapping", () => {
 			oembedPacer: noopPacer,
 			pagePacer: noopPacer,
 			graphqlPacer: noopPacer,
+			transcriptPacer: noopPacer,
 			enableGraphql: false,
 			fetchImpl: mockFetch(
 				() =>
@@ -205,6 +281,7 @@ describe("createLoomClient — oEmbed status mapping", () => {
 			oembedPacer: noopPacer,
 			pagePacer: noopPacer,
 			graphqlPacer: noopPacer,
+			transcriptPacer: noopPacer,
 			enableGraphql: false,
 			fetchImpl: mockFetch(() => new Response("", { status: 403 })),
 		});
@@ -217,6 +294,7 @@ describe("createLoomClient — oEmbed status mapping", () => {
 			oembedPacer: noopPacer,
 			pagePacer: noopPacer,
 			graphqlPacer: noopPacer,
+			transcriptPacer: noopPacer,
 			enableGraphql: false,
 			fetchImpl: mockFetch(() => new Response("", { status: 404 })),
 		});
@@ -229,6 +307,7 @@ describe("createLoomClient — oEmbed status mapping", () => {
 			oembedPacer: noopPacer,
 			pagePacer: noopPacer,
 			graphqlPacer: noopPacer,
+			transcriptPacer: noopPacer,
 			enableGraphql: false,
 			fetchImpl: mockFetch(() => new Response("", { status: 500 })),
 		});
@@ -242,6 +321,7 @@ describe("createLoomClient — oEmbed status mapping", () => {
 			oembedPacer: noopPacer,
 			pagePacer: noopPacer,
 			graphqlPacer: noopPacer,
+			transcriptPacer: noopPacer,
 			enableGraphql: false,
 			fetchImpl: vi.fn(async () => {
 				throw new Error("connection refused");
@@ -260,6 +340,7 @@ describe("createLoomClient — GraphQL kill switch", () => {
 			oembedPacer: noopPacer,
 			pagePacer: noopPacer,
 			graphqlPacer: noopPacer,
+			transcriptPacer: noopPacer,
 			enableGraphql: false,
 			fetchImpl: fetchSpy as unknown as typeof fetch,
 		});
@@ -280,10 +361,87 @@ describe("createLoomClient — GraphQL kill switch", () => {
 			oembedPacer: noopPacer,
 			pagePacer: noopPacer,
 			graphqlPacer: noopPacer,
+			transcriptPacer: noopPacer,
 			enableGraphql: true,
 			fetchImpl: fetchSpy,
 		});
 		const r = await client.fetchGraphQL("abc123def456abc123def456");
 		expect(r.status).toBe("ok");
+	});
+});
+
+describe("createLoomClient — fetchTranscriptJson", () => {
+	const signedUrl =
+		"https://cdn.loom.com/mediametadata/transcription/abc-1.json?Policy=x&Signature=y&Key-Pair-Id=z";
+
+	function mockFetch(handler: () => Response) {
+		return vi.fn(async (): Promise<Response> => handler()) as unknown as typeof fetch;
+	}
+
+	function makeClient(fetchImpl: typeof fetch) {
+		return createLoomClient({
+			oembedPacer: noopPacer,
+			pagePacer: noopPacer,
+			graphqlPacer: noopPacer,
+			transcriptPacer: noopPacer,
+			enableGraphql: true,
+			fetchImpl,
+		});
+	}
+
+	it("returns ok with mapped cues on 200", async () => {
+		const client = makeClient(
+			mockFetch(
+				() =>
+					new Response(JSON.stringify(TRANSCRIPT_OK), {
+						status: 200,
+						headers: { "content-type": "application/json" },
+					}),
+			),
+		);
+		const r = await client.fetchTranscriptJson(signedUrl);
+		if (r.status !== "ok") throw new Error("expected ok");
+		expect(r.cues).toHaveLength(3);
+		expect(r.cues[0]?.startSeconds).toBe(0);
+	});
+
+	it("returns failed on 403 (signed URL expired)", async () => {
+		const client = makeClient(mockFetch(() => new Response("", { status: 403 })));
+		const r = await client.fetchTranscriptJson(signedUrl);
+		if (r.status !== "failed") throw new Error("expected failed");
+		expect(r.error).toBe("HTTP 403");
+	});
+
+	it("returns failed on 500", async () => {
+		const client = makeClient(mockFetch(() => new Response("", { status: 500 })));
+		const r = await client.fetchTranscriptJson(signedUrl);
+		if (r.status !== "failed") throw new Error("expected failed");
+		expect(r.error).toBe("HTTP 500");
+	});
+
+	it("returns failed on network error", async () => {
+		const client = makeClient(
+			vi.fn(async () => {
+				throw new Error("connection refused");
+			}) as unknown as typeof fetch,
+		);
+		const r = await client.fetchTranscriptJson(signedUrl);
+		if (r.status !== "failed") throw new Error("expected failed");
+		expect(r.error).toBe("connection refused");
+	});
+
+	it("returns failed when the CDN returns invalid JSON", async () => {
+		const client = makeClient(
+			mockFetch(
+				() =>
+					new Response("<<not json>>", {
+						status: 200,
+						headers: { "content-type": "application/json" },
+					}),
+			),
+		);
+		const r = await client.fetchTranscriptJson(signedUrl);
+		if (r.status !== "failed") throw new Error("expected failed");
+		expect(r.error).toContain("invalid JSON");
 	});
 });

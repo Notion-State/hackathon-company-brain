@@ -325,11 +325,12 @@ The converted message text is **not** subsequently markdown-escaped — escaping
 
 Holds one row per source-DB page that contains a Loom URL. Primary key is `Source Page ID = page.id` (the bare Notion page id from the source database `c148c2e3aa554651bd9ca44b1de751d0`). One source row → one target row; if the source row's `Video URL` value changes, the same target row updates in place. This preserves a 1:1 mapping with the source DB and means private/unavailable videos still get rows (with `Sync Status` set accordingly) so downstream agents can see what was attempted.
 
-The Loom platform has **no general-purpose REST API**; the worker composes three independent public enrichment surfaces, each behind its own pacer, each catching failures:
+The Loom platform has **no general-purpose REST API**; the worker composes four independent public enrichment surfaces, each behind its own pacer, each catching failures:
 
 - **oEmbed** (`https://www.loom.com/v1/oembed?url=…`) — documented, stable. Title, thumbnail, duration, author name.
 - **Public share-page** OG/JSON-LD scrape — stable in practice (it's the same metadata every social-share preview uses). Description, upload date, JSON-LD VideoObject fields.
-- **Public GraphQL** (`https://www.loom.com/graphql`) — undocumented, operation names drift. Owner email, view/comment counts, transcript. Controlled by `LOOM_ENABLE_GRAPHQL` (kill switch).
+- **Public GraphQL** (`https://www.loom.com/graphql`) — undocumented, operation names drift. Composite query selects `getVideo` for owner / description / comment count and `fetchVideoTranscript` for a signed CloudFront URL pointing at the transcript JSON. Controlled by `LOOM_ENABLE_GRAPHQL` (kill switch).
+- **Signed CloudFront transcript JSON** — fetched from the `source_url` GraphQL returned. ~5-minute Policy expiry; fetched immediately after GraphQL on a per-row basis.
 
 Status precedence (`Sync Status` column):
 - `Private` — oEmbed or share page returned 403.
@@ -348,12 +349,11 @@ GraphQL failure never downgrades the row status — it's best-effort enrichment 
 | `Video ID` | rich_text | yes | Parsed from the Loom URL (`loom.com/share/<id>` or `loom.com/embed/<id>`, lowercased). Empty when URL is unparseable. |
 | `Thumbnail URL` | url | yes | oEmbed `thumbnail_url` → JSON-LD `thumbnailUrl` → OG `og:image`. Stored as a URL (not a `file` property) because empty file-property values are undocumented and consumers can render the image themselves. |
 | `Duration (sec)` | number | yes | oEmbed `duration` (seconds) → JSON-LD ISO 8601 `PT…` parsed → OG `og:video:duration`. Fallback: `0`. |
-| `Owner Name` | rich_text | yes | GraphQL `ownerName` → oEmbed `author_name`. Empty when both absent or GraphQL disabled. |
-| `Owner Email` | email | yes | GraphQL `ownerEmail`. Empty when GraphQL disabled or owner lookup unavailable. |
+| `Owner Name` | rich_text | yes | GraphQL `owner.display_name` → oEmbed `author_name`. Empty when both absent or GraphQL disabled. |
+| `Owner Email` | email | yes | GraphQL `owner.email`. Often empty even when GraphQL succeeds — Loom only surfaces email for owners who chose to expose it publicly. |
 | `Upload Date` | date (datetime) | yes | JSON-LD `uploadDate` → GraphQL `createdAt`. Fallback: sync run timestamp (so the property is always populated). |
-| `Description` | rich_text | yes | OG `og:description` → JSON-LD `description`. Clipped at 2000 chars. Empty if both absent. |
-| `View Count` | number | yes | GraphQL `viewCount`. Fallback: `0`. Drifts between backfills — see known limitations. |
-| `Comment Count` | number | yes | GraphQL `commentCount`. Fallback: `0`. Same drift caveat. |
+| `Description` | rich_text | yes | GraphQL `description` → OG `og:description` → JSON-LD `description`. Clipped at 2000 chars. GraphQL preserves newlines; the meta-tag values are condensed previews. Empty if all absent. |
+| `Comment Count` | number | yes | GraphQL `commentCount`. Fallback: `0`. Drifts between backfills — see known limitations. |
 | `Sync Status` | select | no | `Enriched` (green) / `Private` (orange) / `Unavailable` (red) / `Failed` (red). Computed from oEmbed + share-page statuses (GraphQL doesn't influence). |
 | `Last Enriched At` | date (datetime) | no | Wall-clock at sync write. Equals `Synced At` in v1 but kept as a distinct property for future "skip-if-recently-enriched" cache logic. |
 | `Source` | select | no | Hardcoded `"Loom"`. Future-proofs alongside the other ingest workers. |
@@ -369,7 +369,7 @@ Note: an "Embed URL" property is not stored because it's deterministic from `Vid
 > _Status: {Sync Status}. Some fields may be empty._   ← only when status ≠ Enriched
 
 **Owner:** {Owner Name} <{Owner Email}>  |  **Uploaded:** {Upload Date}  |  **Duration:** {M:SS or H:MM:SS}
-**Views:** {View Count}  |  **Comments:** {Comment Count}
+**Comments:** {Comment Count}
 **Source page:** [{Source URL}]({Source URL})
 
 [Watch on Loom]({Video URL})
@@ -386,7 +386,7 @@ Note: an "Embed URL" property is not stored because it's deterministic from `Vid
 …
 ```
 
-Transcript cues are rendered with `M:SS` (or `H:MM:SS`) timestamps. Speaker is omitted from the prefix when absent. The transcript section falls back to `_Transcript not available._` when GraphQL didn't return cues (disabled, schema drift, or the video has no captions).
+Transcript cues are rendered with `M:SS` (or `H:MM:SS`) timestamps. The transcript JSON Loom exposes carries no speaker label, so the speaker prefix is always omitted in v1. The transcript section falls back to `_Transcript not available._` when GraphQL didn't return a transcript URL (disabled, schema drift, or `transcription_status !== "success"`), when the signed-CloudFront fetch failed, or when the `phrases` array was empty.
 
 #### Sync sources
 
@@ -398,7 +398,11 @@ Transcript cues are rendered with `M:SS` (or `H:MM:SS`) timestamps. Speaker is o
 #### Known limitations
 
 - **GraphQL is best-effort and undocumented.** Operation names drift; `LOOM_ENABLE_GRAPHQL=false` is the kill switch.
+- **View counts are not available.** Loom's public GraphQL surface exposes no Query field that reaches `VideoViewCounts`. The web UI loads view counts via an Apollo-cache reference that isn't reachable from the public schema; the column was removed in v1.
 - **Engagement metrics drift between backfills** — `loomDelta` only re-enriches a row when the source DB row is edited.
+- **Owner email is often empty.** Loom only surfaces the owner's email on public GraphQL responses for owners who chose to expose it; for most workspaces this is null.
+- **Speaker labels are not surfaced.** Loom's transcript JSON has no speaker field; the rendered cues use `**[M:SS]** {text}` only.
+- **Signed transcript URL has a ~5 min expiry.** The worker fetches the JSON immediately after GraphQL on a per-row basis; batching GraphQL calls and draining transcripts later would 403.
 - **Password-protected videos are not supported** in v1.
 - **No write-back** to the source DB.
 - **Single source DB in v1.** The primary key uses bare `page.id` — a future second source DB would need a `${dbId}:` prefix to avoid collisions.
