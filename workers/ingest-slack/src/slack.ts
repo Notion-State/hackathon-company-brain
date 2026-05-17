@@ -154,7 +154,12 @@ export function createSlackClient(token: string, pacer: Pacer, opts: CreateSlack
 				web.conversations.list({
 					types: "public_channel,private_channel",
 					exclude_archived: true,
-					limit: 200,
+					// Held well below Slack's per-page max: slackChannelsSync resolves
+					// listMembers + per-member users.info for every channel on the page
+					// under the shared 45/min pacer, so larger pages exceed the 5-min
+					// sync execute timeout. Backfill/delta only iterate channels and
+					// aren't constrained, but share this method.
+					limit: 25,
 					cursor,
 				}),
 			);
