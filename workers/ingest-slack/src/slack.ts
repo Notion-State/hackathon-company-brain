@@ -53,6 +53,7 @@ export type SlackFile = {
 	name: string;
 	mimetype: string | null;
 	url_private: string | null;
+	url_private_download: string | null;
 	permalink: string | null;
 };
 
@@ -97,7 +98,9 @@ export type SlackTeamInfo = {
 export type Pacer = { wait(): Promise<void> };
 
 export type SlackClient = {
-	listPublicChannels(cursor?: string): Promise<{ channels: SlackChannel[]; nextCursor?: string }>;
+	listChannels(cursor?: string): Promise<{ channels: SlackChannel[]; nextCursor?: string }>;
+	/** Paginates `conversations.members` for a channel. Soft-fails on `channel_not_found` / `not_in_channel` (returns `[]`). */
+	listMembers(channelId: string): Promise<string[]>;
 	joinChannel(channelId: string): Promise<{ ok: boolean; warning?: string }>;
 	historyPage(channelId: string, args: { oldest?: string; cursor?: string }): Promise<{ messages: SlackMessage[]; hasMore: boolean; nextCursor?: string }>;
 	/** Fetches every reply page for a thread. Returns parent + replies, in arrival order. */
@@ -146,10 +149,10 @@ export function createSlackClient(token: string, pacer: Pacer, opts: CreateSlack
 	}
 
 	return {
-		async listPublicChannels(cursor) {
+		async listChannels(cursor) {
 			const res = await call("conversations.list", () =>
 				web.conversations.list({
-					types: "public_channel",
+					types: "public_channel,private_channel",
 					exclude_archived: true,
 					limit: 200,
 					cursor,
@@ -157,6 +160,35 @@ export function createSlackClient(token: string, pacer: Pacer, opts: CreateSlack
 			);
 			const channels = (res.channels ?? []).map(normalizeChannel).filter((c): c is SlackChannel => c !== null);
 			return { channels, nextCursor: res.response_metadata?.next_cursor || undefined };
+		},
+
+		async listMembers(channelId) {
+			const memberIds: string[] = [];
+			let cursor: string | undefined;
+			try {
+				for (;;) {
+					const res = await call("conversations.members", () =>
+						web.conversations.members({
+							channel: channelId,
+							limit: 200,
+							cursor,
+						}),
+					);
+					for (const id of res.members ?? []) memberIds.push(id);
+					const next = res.response_metadata?.next_cursor;
+					if (!next) break;
+					cursor = next;
+				}
+			} catch (e) {
+				if (
+					isPlatformErrorWithCode(e, "channel_not_found")
+					|| isPlatformErrorWithCode(e, "not_in_channel")
+				) {
+					return [];
+				}
+				throw e;
+			}
+			return memberIds;
 		},
 
 		async joinChannel(channelId) {
@@ -324,7 +356,7 @@ function normalizeMessage(m: {
 	reply_count?: number;
 	latest_reply?: string;
 	reactions?: Array<{ name?: string; count?: number }>;
-	files?: Array<{ id?: string; name?: string; mimetype?: string; url_private?: string; permalink?: string }>;
+	files?: Array<{ id?: string; name?: string; mimetype?: string; url_private?: string; url_private_download?: string; permalink?: string }>;
 	attachments?: unknown[];
 }): SlackMessage {
 	return {
@@ -343,7 +375,7 @@ function normalizeMessage(m: {
 			.filter((r): r is { name: string; count: number } => Boolean(r.name) && typeof r.count === "number")
 			.map((r) => ({ name: r.name, count: r.count })),
 		files: (m.files ?? [])
-			.filter((f): f is { id: string; name: string; mimetype?: string; url_private?: string; permalink?: string } =>
+			.filter((f): f is { id: string; name: string; mimetype?: string; url_private?: string; url_private_download?: string; permalink?: string } =>
 				Boolean(f.id) && Boolean(f.name),
 			)
 			.map((f) => ({
@@ -351,6 +383,7 @@ function normalizeMessage(m: {
 				name: f.name,
 				mimetype: f.mimetype ?? null,
 				url_private: f.url_private ?? null,
+				url_private_download: f.url_private_download ?? null,
 				permalink: f.permalink ?? null,
 			})),
 		attachments_count: m.attachments?.length ?? 0,

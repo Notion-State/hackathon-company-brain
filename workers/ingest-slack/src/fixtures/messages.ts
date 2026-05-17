@@ -87,8 +87,37 @@ export const FILE_SHARE_MESSAGE = msg({
 			name: "spec.pdf",
 			mimetype: "application/pdf",
 			url_private: "https://files.slack.com/files-pri/T1-F001/spec.pdf",
+			url_private_download: "https://files.slack.com/files-pri/T1-F001/download/spec.pdf",
 			permalink: "https://acme.slack.com/files/U_ALICE/F001/spec.pdf",
 		},
+	],
+});
+
+export const IMAGE_SHARE_MESSAGE = msg({
+	ts: "1715900100.000000",
+	user: "U_ALICE",
+	subtype: "file_share",
+	text: "Check this screenshot",
+	files: [
+		{
+			id: "F002",
+			name: "screenshot.png",
+			mimetype: "image/png",
+			url_private: "https://files.slack.com/files-pri/T1-F002/screenshot.png",
+			url_private_download: "https://files.slack.com/files-pri/T1-F002/download/screenshot.png",
+			permalink: "https://acme.slack.com/files/U_ALICE/F002/screenshot.png",
+		},
+	],
+});
+
+export const REACTIONS_MESSAGE = msg({
+	ts: "1715900200.000000",
+	user: "U_ALICE",
+	text: "Ship it!",
+	reactions: [
+		{ name: "thumbsup", count: 3 },
+		{ name: "tada", count: 2 },
+		{ name: "custom_company_emoji", count: 1 },
 	],
 });
 

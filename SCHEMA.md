@@ -205,9 +205,9 @@ See `workers/push-to-client/README.md` for the onboarding checklist: clone the t
 
 ### `Slack Channels` (managed by `workers/ingest-slack`)
 
-Holds one row per public, non-shared channel in the configured Slack workspace. Primary key is the bare Slack channel id (e.g., `C01234ABC`), which is also the value the `Slack Messages` DB's `Channel` relation references.
+Holds one row per non-archived channel (public, private, shared, externally shared) in the configured Slack workspace. Primary key is the bare Slack channel id (e.g., `C01234ABC`), which is also the value the `Slack Messages` DB's `Channel` relation references.
 
-Discovered each cycle of `slackChannelsSync` via `conversations.list(types: public_channel, exclude_archived: true)`, filtered to `!is_shared && !is_ext_shared && !is_private`. Archived channels are mark-and-swept by replace mode (not retained in v1).
+Discovered each cycle of `slackChannelsSync` via `conversations.list(types: "public_channel,private_channel", exclude_archived: true)`. Only archived channels are filtered out. Replace mode mark-and-sweeps archived/removed channels between cycles.
 
 | Property | Type | Source nullable? | Source / fallback |
 |---|---|---|---|
@@ -217,7 +217,12 @@ Discovered each cycle of `slackChannelsSync` via `conversations.list(types: publ
 | `Purpose` | rich_text | yes | `channel.purpose.value`, markdown-escaped, clipped at 2000 chars. Empty when unset. |
 | `Member Count` | number | yes | `channel.num_members`. Fallback: `0`. |
 | `Is Member` | checkbox | no | `channel.is_member` after auto-join attempt. False on channels where join failed (e.g. `not_authorized`); the row is still written so the operator can see why ingest is stalled. |
-| `Is Archived` | checkbox | no | `channel.is_archived`. Always `false` in v1 because `exclude_archived: true` filters them out at the list call; the property is kept for forward-compat. |
+| `Is Archived` | checkbox | no | `channel.is_archived`. Always `false` because `exclude_archived: true` filters them out at the list call; the property is kept for forward-compat. |
+| `Is Private` | checkbox | no | `channel.is_private`. True for private channels. |
+| `Is Shared` | checkbox | no | `channel.is_shared`. True for channels shared with another workspace via Slack Connect. |
+| `Is Externally Shared` | checkbox | no | `channel.is_ext_shared`. True for externally shared (cross-org) channels. |
+| `Member Emails` | rich_text | yes | Comma-separated emails of all channel members, resolved via `conversations.members` → `users.info`. Empty when the bot can't list members (e.g. `not_in_channel`). Clipped at 2000 chars. |
+| `Channel Type` | select | no | Derived: `"Public"`, `"Private"`, or `"Slack Connect"` (ext-shared takes priority over private). |
 | `Created` | date (datetime) | yes | `new Date(channel.created * 1000).toISOString()` (Slack returns epoch seconds). Fallback: sync run timestamp. |
 | `Creator Email` | email | yes | `users.info(channel.creator).profile.email` via the shared identity cache. Empty for bot-created channels, when `users:read.email` is denied, or when the creator can't be resolved. |
 | `Internal Creator` | people | yes | `Builder.people(creatorEmail)` when `creatorEmail` matches `INTERNAL_DOMAINS` (hardcoded `notionstate.com`). Empty otherwise. |
@@ -236,6 +241,8 @@ Discovered each cycle of `slackChannelsSync` via `conversations.list(types: publ
 
 **Purpose:** {Purpose, or "_No purpose set._"}
 
+**Member Emails:** {comma-separated emails}   ← only when non-empty
+
 [Open in Slack]({Slack URL})
 ```
 
@@ -243,7 +250,7 @@ Discovered each cycle of `slackChannelsSync` via `conversations.list(types: publ
 
 | Sync key | Mode | Schedule | Purpose |
 |---|---|---|---|
-| `slackChannelsSync` | `replace` | `1h` | Discovers eligible channels, auto-joins via `conversations.join` where `is_member: false`, writes one row per channel. Replace-mode mark-and-sweep deletes channels archived/removed since the last cycle. Reuses the identity cache for `Creator Email`. |
+| `slackChannelsSync` | `replace` | `1h` | Discovers all non-archived channels (public, private, shared, externally shared), auto-joins via `conversations.join` where `is_member: false`, resolves member emails via `conversations.members` + identity cache, writes one row per channel. Replace-mode mark-and-sweep deletes channels archived/removed since the last cycle. |
 
 ### `Slack Messages` (managed by `workers/ingest-slack`)
 

@@ -22,7 +22,8 @@ function ch(overrides: Partial<SlackChannel>): SlackChannel {
 
 function makeClient(overrides: Partial<SlackClient> = {}): SlackClient {
 	const base: SlackClient = {
-		listPublicChannels: vi.fn(),
+		listChannels: vi.fn(),
+		listMembers: vi.fn(),
 		joinChannel: vi.fn(),
 		historyPage: vi.fn(),
 		repliesAll: vi.fn(),
@@ -39,19 +40,20 @@ describe("isEligible", () => {
 		expect(isEligible(ch({ id: "C1", name: "eng" }))).toBe(true);
 	});
 
-	it.each([
-		["archived", { is_archived: true }],
-		["private", { is_private: true }],
-		["shared", { is_shared: true }],
-		["ext_shared", { is_ext_shared: true }],
-	])("rejects %s channels", (_label, overrides) => {
-		expect(isEligible(ch({ id: "C1", name: "x", ...overrides }))).toBe(false);
+	it("accepts private, shared, and ext_shared channels", () => {
+		expect(isEligible(ch({ id: "C1", name: "priv", is_private: true }))).toBe(true);
+		expect(isEligible(ch({ id: "C2", name: "shared", is_shared: true }))).toBe(true);
+		expect(isEligible(ch({ id: "C3", name: "ext", is_ext_shared: true }))).toBe(true);
+	});
+
+	it("rejects archived channels", () => {
+		expect(isEligible(ch({ id: "C1", name: "x", is_archived: true }))).toBe(false);
 	});
 });
 
 describe("discoverEligibleChannels", () => {
-	it("paginates the list endpoint and filters out non-eligible channels", async () => {
-		const listPublicChannels = vi
+	it("paginates the list endpoint and includes private/shared channels (only filters archived)", async () => {
+		const listChannels = vi
 			.fn()
 			.mockResolvedValueOnce({
 				channels: [
@@ -64,13 +66,15 @@ describe("discoverEligibleChannels", () => {
 				channels: [
 					ch({ id: "C3", name: "general", is_member: true }),
 					ch({ id: "C4", name: "private", is_private: true, is_member: true }),
+					ch({ id: "C5", name: "archived", is_archived: true, is_member: true }),
 				],
 				nextCursor: undefined,
 			});
-		const client = makeClient({ listPublicChannels });
+		const client = makeClient({ listChannels });
 		const out = await discoverEligibleChannels(client, { autoJoin: false });
-		expect(listPublicChannels).toHaveBeenCalledTimes(2);
-		expect(out.map((c) => c.id)).toEqual(["C1", "C3"]);
+		expect(listChannels).toHaveBeenCalledTimes(2);
+		// All non-archived member channels included (C1, C2, C3, C4); archived C5 excluded
+		expect(out.map((c) => c.id)).toEqual(["C1", "C2", "C3", "C4"]);
 	});
 
 	describe("autoJoin: true (channels sync)", () => {
@@ -80,9 +84,9 @@ describe("discoverEligibleChannels", () => {
 				ch({ id: "C2", name: "general", is_member: true }),
 				ch({ id: "C3", name: "design", is_member: false }),
 			];
-			const listPublicChannels = vi.fn().mockResolvedValue({ channels, nextCursor: undefined });
+			const listChannels = vi.fn().mockResolvedValue({ channels, nextCursor: undefined });
 			const joinChannel = vi.fn().mockResolvedValue({ ok: true });
-			const client = makeClient({ listPublicChannels, joinChannel });
+			const client = makeClient({ listChannels, joinChannel });
 
 			const out = await discoverEligibleChannels(client, { autoJoin: true });
 
@@ -101,12 +105,12 @@ describe("discoverEligibleChannels", () => {
 				ch({ id: "C1", name: "restricted", is_member: false }),
 				ch({ id: "C2", name: "eng", is_member: false }),
 			];
-			const listPublicChannels = vi.fn().mockResolvedValue({ channels, nextCursor: undefined });
+			const listChannels = vi.fn().mockResolvedValue({ channels, nextCursor: undefined });
 			const joinChannel = vi
 				.fn()
 				.mockResolvedValueOnce({ ok: false, warning: "not_authorized" })
 				.mockResolvedValueOnce({ ok: true });
-			const client = makeClient({ listPublicChannels, joinChannel });
+			const client = makeClient({ listChannels, joinChannel });
 
 			const out = await discoverEligibleChannels(client, { autoJoin: true });
 
@@ -122,9 +126,9 @@ describe("discoverEligibleChannels", () => {
 				ch({ id: "C2", name: "design", is_member: false }),
 				ch({ id: "C3", name: "general", is_member: true }),
 			];
-			const listPublicChannels = vi.fn().mockResolvedValue({ channels, nextCursor: undefined });
+			const listChannels = vi.fn().mockResolvedValue({ channels, nextCursor: undefined });
 			const joinChannel = vi.fn();
-			const client = makeClient({ listPublicChannels, joinChannel });
+			const client = makeClient({ listChannels, joinChannel });
 
 			const out = await discoverEligibleChannels(client, { autoJoin: false });
 

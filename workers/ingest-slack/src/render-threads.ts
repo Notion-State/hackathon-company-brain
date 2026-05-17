@@ -14,10 +14,11 @@
  */
 
 import * as Builder from "@notionhq/workers/builder";
+import { convertEmojiShortcodes, shortcodeToUnicode } from "./emoji.js";
 import { isInternal } from "./internal-domains.js";
 import type { IdentityLookup, SlackIdentity } from "./lookups.js";
 import { escapeMarkdown } from "./markdown.js";
-import type { SlackChannel, SlackFile, SlackMessage } from "./slack.js";
+import type { SlackChannel, SlackFile, SlackMessage, SlackReaction } from "./slack.js";
 import { slackTsToIso } from "./sync-state.js";
 import type { Thread } from "./threads.js";
 
@@ -109,7 +110,11 @@ export async function renderThreadMarkdown(
 		lines.push(`**${escapeMarkdown(ident.displayText)} — ${slackTsToIso(m.ts)}**`);
 		lines.push(convertedText || "_(no text)_");
 		for (const f of m.files) {
-			lines.push(`- 📎 [${escapeMarkdown(f.name)}](${fileUrl(f)})`);
+			const icon = isImageFile(f) ? "🖼️" : "📎";
+			lines.push(`- ${icon} [${escapeMarkdown(f.name)}](${fileUrl(f)})`);
+		}
+		if (m.reactions.length > 0) {
+			lines.push(renderReactions(m.reactions));
 		}
 		lines.push("");
 	}
@@ -135,7 +140,19 @@ async function collectParticipants(
 }
 
 function fileUrl(f: SlackFile): string {
-	return f.permalink ?? f.url_private ?? "";
+	return f.permalink ?? f.url_private_download ?? f.url_private ?? "";
+}
+
+function isImageFile(f: SlackFile): boolean {
+	return Boolean(f.mimetype && f.mimetype.startsWith("image/"));
+}
+
+function renderReactions(reactions: SlackReaction[]): string {
+	const parts = reactions.map((r) => {
+		const emoji = shortcodeToUnicode(r.name) ?? `:${r.name}:`;
+		return `${emoji} ${r.count}`;
+	});
+	return `> ${parts.join("  ")}`;
 }
 
 function clip(s: string): string {
@@ -215,6 +232,9 @@ export async function convertSlackMrkdwn(text: string, identity: IdentityLookup)
 
 	// Strikethrough: ~foo~ → ~~foo~~
 	out = out.replace(/(^|[^~])~([^~\s][^~]*?)~(?!~)/g, (_full, pre: string, inner: string) => `${pre}~~${inner}~~`);
+
+	// Emoji shortcodes → Unicode (standard) or left as :name: (custom)
+	out = convertEmojiShortcodes(out);
 
 	return out;
 }
