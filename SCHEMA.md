@@ -314,6 +314,88 @@ The converted message text is **not** subsequently markdown-escaped — escaping
 - **New-channel latency** ≤ 1h + 5min (next channels sync joins, next delta picks up).
 - **Polling only**; Slack Events API deferred.
 
+### `Loom Videos` (managed by `workers/ingest-loom`)
+
+Holds one row per source-DB page that contains a Loom URL. Primary key is `Source Page ID = page.id` (the bare Notion page id from the source database `c148c2e3aa554651bd9ca44b1de751d0`). One source row → one target row; if the source row's `Video URL` value changes, the same target row updates in place. This preserves a 1:1 mapping with the source DB and means private/unavailable videos still get rows (with `Sync Status` set accordingly) so downstream agents can see what was attempted.
+
+The Loom platform has **no general-purpose REST API**; the worker composes three independent public enrichment surfaces, each behind its own pacer, each catching failures:
+
+- **oEmbed** (`https://www.loom.com/v1/oembed?url=…`) — documented, stable. Title, thumbnail, duration, author name.
+- **Public share-page** OG/JSON-LD scrape — stable in practice (it's the same metadata every social-share preview uses). Description, upload date, JSON-LD VideoObject fields.
+- **Public GraphQL** (`https://www.loom.com/graphql`) — undocumented, operation names drift. Owner email, view/comment counts, transcript. Controlled by `LOOM_ENABLE_GRAPHQL` (kill switch).
+
+Status precedence (`Sync Status` column):
+- `Private` — oEmbed or share page returned 403.
+- `Unavailable` — oEmbed or share page returned 404 (deleted/removed).
+- `Enriched` — at least one of oEmbed / share page succeeded.
+- `Failed` — both oEmbed and share page errored.
+
+GraphQL failure never downgrades the row status — it's best-effort enrichment on top of Core metadata.
+
+| Property | Type | Source nullable? | Source / fallback |
+|---|---|---|---|
+| `Title` | title | yes | oEmbed `title` → OG `og:title` → JSON-LD `name`. Fallback: `"Untitled Loom video"`. |
+| `Source Page ID` | rich_text | no | **Primary key.** Bare Notion page id from the source DB (e.g., `a1b2c3d4-e5f6-…`). |
+| `Source URL` | url | no | `page.url` — deep link to the source row. |
+| `Video URL` | url | no | The `Video URL` property value on the source row (URL-typed; falls back to joined rich_text). |
+| `Video ID` | rich_text | yes | Parsed from the Loom URL (`loom.com/share/<id>` or `loom.com/embed/<id>`, lowercased). Empty when URL is unparseable. |
+| `Thumbnail URL` | url | yes | oEmbed `thumbnail_url` → JSON-LD `thumbnailUrl` → OG `og:image`. Stored as a URL (not a `file` property) because empty file-property values are undocumented and consumers can render the image themselves. |
+| `Duration (sec)` | number | yes | oEmbed `duration` (seconds) → JSON-LD ISO 8601 `PT…` parsed → OG `og:video:duration`. Fallback: `0`. |
+| `Owner Name` | rich_text | yes | GraphQL `ownerName` → oEmbed `author_name`. Empty when both absent or GraphQL disabled. |
+| `Owner Email` | email | yes | GraphQL `ownerEmail`. Empty when GraphQL disabled or owner lookup unavailable. |
+| `Upload Date` | date (datetime) | yes | JSON-LD `uploadDate` → GraphQL `createdAt`. Fallback: sync run timestamp (so the property is always populated). |
+| `Description` | rich_text | yes | OG `og:description` → JSON-LD `description`. Clipped at 2000 chars. Empty if both absent. |
+| `View Count` | number | yes | GraphQL `viewCount`. Fallback: `0`. Drifts between backfills — see known limitations. |
+| `Comment Count` | number | yes | GraphQL `commentCount`. Fallback: `0`. Same drift caveat. |
+| `Sync Status` | select | no | `Enriched` (green) / `Private` (orange) / `Unavailable` (red) / `Failed` (red). Computed from oEmbed + share-page statuses (GraphQL doesn't influence). |
+| `Last Enriched At` | date (datetime) | no | Wall-clock at sync write. Equals `Synced At` in v1 but kept as a distinct property for future "skip-if-recently-enriched" cache logic. |
+| `Source` | select | no | Hardcoded `"Loom"`. Future-proofs alongside the other ingest workers. |
+| `Synced At` | date (datetime) | no | Wall-clock at sync run. |
+
+Note: an "Embed URL" property is not stored because it's deterministic from `Video ID` — consumers can construct `https://www.loom.com/embed/${videoId}` themselves.
+
+#### Page body (`pageContentMarkdown`)
+
+```
+# {Title}
+
+> _Status: {Sync Status}. Some fields may be empty._   ← only when status ≠ Enriched
+
+**Owner:** {Owner Name} <{Owner Email}>  |  **Uploaded:** {Upload Date}  |  **Duration:** {M:SS or H:MM:SS}
+**Views:** {View Count}  |  **Comments:** {Comment Count}
+**Source page:** [{Source URL}]({Source URL})
+
+[Watch on Loom]({Video URL})
+
+## Description
+{Description, or "_No description._"}
+
+## Transcript
+
+**[0:00] {speaker}:** {cue text}
+
+**[0:12]** {cue text without speaker}
+
+…
+```
+
+Transcript cues are rendered with `M:SS` (or `H:MM:SS`) timestamps. Speaker is omitted from the prefix when absent. The transcript section falls back to `_Transcript not available._` when GraphQL didn't return cues (disabled, schema drift, or the video has no captions).
+
+#### Sync sources
+
+| Sync key | Mode | Schedule | Purpose |
+|---|---|---|---|
+| `loomBackfill` | `replace` | `manual` | Full sweep of the source DB via `notion.dataSources.query` (single-source database; multi-source throws). Re-fetches every enrichment. Replace-mode mark-and-sweep removes target rows whose source pages were archived/deleted. Trigger after deploy and periodically (engagement metrics drift). |
+| `loomDelta` | `incremental` | `5m` | Source DB filter `last_edited_time on_or_after {fromCursor}` sorted ascending. **60-second consistency buffer** (mirrors `ingest-client-notion`) — Notion writes are atomic so 60s comfortably covers cross-region propagation + clock skew. End-of-cycle promotes max `last_edited_time` seen to the new watermark, clamped to `now - 60s`. Does **not** refresh engagement metrics on unchanged source rows. |
+
+#### Known limitations
+
+- **GraphQL is best-effort and undocumented.** Operation names drift; `LOOM_ENABLE_GRAPHQL=false` is the kill switch.
+- **Engagement metrics drift between backfills** — `loomDelta` only re-enriches a row when the source DB row is edited.
+- **Password-protected videos are not supported** in v1.
+- **No write-back** to the source DB.
+- **Single source DB in v1.** The primary key uses bare `page.id` — a future second source DB would need a `${dbId}:` prefix to avoid collisions.
+
 ## Adding a new database
 
 When you add a managed Notion database in a worker, append a section to this file with:

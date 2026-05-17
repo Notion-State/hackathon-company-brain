@@ -1,0 +1,15 @@
+export const OEMBED_OK = {
+	type: "video",
+	version: "1.0",
+	provider_name: "Loom",
+	provider_url: "https://www.loom.com",
+	title: "Product walkthrough",
+	author_name: "Alex Lee",
+	thumbnail_url: "https://cdn.loom.com/sessions/thumbnails/abc123-with-play.jpg",
+	thumbnail_width: 1920,
+	thumbnail_height: 1080,
+	width: 1920,
+	height: 1080,
+	duration: 225,
+	html: '<iframe src="https://www.loom.com/embed/abc123def456" …></iframe>',
+};
