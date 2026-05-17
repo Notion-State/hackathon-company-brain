@@ -326,6 +326,7 @@ worker.webhook("onDraftStatusChange", {
 					resultingStatus: result.resultingStatus,
 					pushed: result.pushed.length,
 					failures: result.failures.length,
+					failureDetails: result.failures,
 				});
 			} catch (err) {
 				// Log + swallow so a misconfigured single draft doesn't trip the
