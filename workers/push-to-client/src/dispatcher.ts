@@ -130,7 +130,7 @@ export type DispatcherDeps = {
 	preflight: PreflightCache;
 	companyMapping: CompanyMapping;
 	artifactCategory: ArtifactCategoryResolver;
-	displayNames: Record<string, string>; // by clientId, plus "notion-state"
+	displayNames: Record<string, string>; // by clientId, plus the home id (HOME_CLIENT_ID)
 	now?: () => Date;
 };
 
@@ -446,7 +446,7 @@ function linkTextFor(
 ): string {
 	const baseName =
 		side === "NSOS"
-			? displayNames["notion-state"] ?? "Notion State OS"
+			? displayNames[HOME_CLIENT_ID] ?? "Notion State OS"
 			: displayNames[resolvedClientId ?? ""] ?? resolvedClientId ?? "Client";
 	return `${baseName} – ${DOC_TYPE_LABEL[docType]}`;
 }

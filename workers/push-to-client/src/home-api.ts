@@ -4,9 +4,11 @@
  * reads + writes against our own workspace (the AI Drafts row, its `Company`
  * + `Artifact Category` relations, body blocks, Status/Location writeback).
  *
- * We reuse the `notion-state` `ClientApi` from the existing per-client
+ * We reuse the `notionstate` `ClientApi` from the existing per-client
  * registry rather than configuring a separate token: one secret, one set of
- * connections to maintain.
+ * connections to maintain. The id is one word (`notionstate`, not
+ * `notion-state`) because env-var names can't contain hyphens — the
+ * `CLIENT_TOKEN_<ID>` parser lowercases the suffix verbatim.
  */
 
 import type { UpdatePageParameters } from "@notionhq/client/build/src/api-endpoints/pages.js";
@@ -18,7 +20,7 @@ import type { ClientApi, NotionSdkSubset } from "./notion-client.js";
 
 export type UpdatePageProperties = NonNullable<UpdatePageParameters["properties"]>;
 
-export const HOME_CLIENT_ID = "notion-state";
+export const HOME_CLIENT_ID = "notionstate";
 
 export type HomeApi = {
 	id: typeof HOME_CLIENT_ID;

@@ -10,7 +10,7 @@ import {
 	PushToClientError,
 	UnpushableArtifactCategory,
 } from "./errors.js";
-import type { HomeApi } from "./home-api.js";
+import { HOME_CLIENT_ID, type HomeApi } from "./home-api.js";
 import type { ClientApi, NotionSdkSubset } from "./notion-client.js";
 import { PreflightCache, type DestSchema } from "./preflight.js";
 import { dispatchDraft, throwIfPartialFailure, type DispatcherDeps } from "./dispatcher.js";
@@ -69,7 +69,7 @@ function makeHomeApi(opts: {
 	const { sdk, pagesRetrieve, pagesUpdate } = makeHomeSdk(opts);
 	return {
 		api: {
-			id: "notion-state",
+			id: HOME_CLIENT_ID,
 			waitForPacer: vi.fn<() => Promise<void>>(async () => undefined),
 			sdk,
 		},
@@ -197,7 +197,7 @@ function makeDeps(args: {
 		artifactCategory: makeArtifactCategoryResolver(
 			args.categoryMap ?? { [CATEGORY_ID]: docType },
 		),
-		displayNames: args.displayNames ?? { acme: "Acme", "notion-state": "Notion State" },
+		displayNames: args.displayNames ?? { acme: "Acme", [HOME_CLIENT_ID]: "Notion State" },
 		now: args.now ?? (() => new Date("2026-05-20T12:00:00.000Z")),
 	};
 }
@@ -251,7 +251,7 @@ describe("dispatchDraft — Docs / Send to Client OS", () => {
 				companyIds: [COMPANY_ID],
 			}),
 		});
-		const perClient = makePerClient(["acme", "notion-state"]);
+		const perClient = makePerClient(["acme", HOME_CLIENT_ID]);
 		const deps = makeDeps({ homeApi, perClient, docType: "Docs" });
 
 		const result = await dispatchDraft({ draftPageId: DRAFT_ID }, deps);
@@ -278,7 +278,7 @@ describe("dispatchDraft — Send to Notion State OS", () => {
 				companyIds: [],
 			}),
 		});
-		const perClient = makePerClient(["acme", "notion-state"]);
+		const perClient = makePerClient(["acme", HOME_CLIENT_ID]);
 		const deps = makeDeps({ homeApi, perClient, docType: "Docs" });
 
 		const result = await dispatchDraft({ draftPageId: DRAFT_ID }, deps);
@@ -300,7 +300,7 @@ describe("dispatchDraft — Send to Both", () => {
 				companyIds: [COMPANY_ID],
 			}),
 		});
-		const perClient = makePerClient(["acme", "notion-state"]);
+		const perClient = makePerClient(["acme", HOME_CLIENT_ID]);
 		const deps = makeDeps({ homeApi, perClient, docType: "Docs" });
 
 		const result = await dispatchDraft({ draftPageId: DRAFT_ID }, deps);
@@ -323,7 +323,7 @@ describe("dispatchDraft — Send to Both", () => {
 				companyIds: [COMPANY_ID],
 			}),
 		});
-		const perClient = makePerClient(["acme", "notion-state"]);
+		const perClient = makePerClient(["acme", HOME_CLIENT_ID]);
 		// Build deps that only seed the ACME side; NS OS preflight falls through
 		// to the SDK (whose default mock returns `{}` — no data_sources → preflight
 		// throws DestinationSchemaMismatch, which surfaces as a per-side failure).
@@ -343,7 +343,7 @@ describe("dispatchDraft — Send to Both", () => {
 			preflight: partialPreflight,
 			companyMapping: makeCompanyMapping({ [COMPANY_ID]: "acme" }),
 			artifactCategory: makeArtifactCategoryResolver({ [CATEGORY_ID]: "Docs" }),
-			displayNames: { acme: "Acme", "notion-state": "Notion State" },
+			displayNames: { acme: "Acme", [HOME_CLIENT_ID]: "Notion State" },
 			now: () => new Date("2026-05-20T12:00:00.000Z"),
 		};
 
@@ -371,7 +371,7 @@ describe("dispatchDraft — idempotency + non-trigger no-ops", () => {
 				companyIds: [COMPANY_ID],
 			}),
 		});
-		const perClient = makePerClient(["acme", "notion-state"]);
+		const perClient = makePerClient(["acme", HOME_CLIENT_ID]);
 		const deps = makeDeps({ homeApi, perClient });
 
 		const result = await dispatchDraft({ draftPageId: DRAFT_ID }, deps);
@@ -387,7 +387,7 @@ describe("dispatchDraft — idempotency + non-trigger no-ops", () => {
 				artifactCategoryIds: [CATEGORY_ID],
 			}),
 		});
-		const perClient = makePerClient(["acme", "notion-state"]);
+		const perClient = makePerClient(["acme", HOME_CLIENT_ID]);
 		const deps = makeDeps({ homeApi, perClient });
 
 		const result = await dispatchDraft({ draftPageId: DRAFT_ID }, deps);
@@ -406,7 +406,7 @@ describe("dispatchDraft — error paths", () => {
 				companyIds: [COMPANY_ID],
 			}),
 		});
-		const perClient = makePerClient(["acme", "notion-state"]);
+		const perClient = makePerClient(["acme", HOME_CLIENT_ID]);
 		const deps = makeDeps({
 			homeApi,
 			perClient,
@@ -426,7 +426,7 @@ describe("dispatchDraft — error paths", () => {
 				companyIds: ["unknown_company"],
 			}),
 		});
-		const perClient = makePerClient(["acme", "notion-state"]);
+		const perClient = makePerClient(["acme", HOME_CLIENT_ID]);
 		const deps = makeDeps({ homeApi, perClient, docType: "Docs" });
 		await expect(dispatchDraft({ draftPageId: DRAFT_ID }, deps)).rejects.toBeInstanceOf(
 			MissingClientForCompany,
@@ -441,7 +441,7 @@ describe("dispatchDraft — error paths", () => {
 				companyIds: [],
 			}),
 		});
-		const perClient = makePerClient(["acme", "notion-state"]);
+		const perClient = makePerClient(["acme", HOME_CLIENT_ID]);
 		const deps = makeDeps({ homeApi, perClient, docType: "Docs" });
 		await expect(dispatchDraft({ draftPageId: DRAFT_ID }, deps)).rejects.toBeInstanceOf(
 			MissingDraftRelation,
@@ -455,7 +455,7 @@ describe("dispatchDraft — error paths", () => {
 				artifactCategoryIds: [],
 			}),
 		});
-		const perClient = makePerClient(["notion-state"]);
+		const perClient = makePerClient([HOME_CLIENT_ID]);
 		const deps = makeDeps({ homeApi, perClient });
 		await expect(dispatchDraft({ draftPageId: DRAFT_ID }, deps)).rejects.toBeInstanceOf(
 			MissingDraftRelation,
@@ -472,10 +472,10 @@ describe("dispatchDraft — defaults applied per docType", () => {
 				artifactCategoryIds: [CATEGORY_ID],
 			}),
 		});
-		const perClient = makePerClient(["notion-state"]);
+		const perClient = makePerClient([HOME_CLIENT_ID]);
 		const deps = makeDeps({ homeApi, perClient, docType: "Docs" });
 		await dispatchDraft({ draftPageId: DRAFT_ID }, deps);
-		const create = vi.mocked(perClient["notion-state"]!.sdk.pages.create)
+		const create = vi.mocked(perClient[HOME_CLIENT_ID]!.sdk.pages.create)
 			.mock.calls[0]?.[0];
 		if (!create?.properties) throw new Error("expected properties");
 		expect(create.properties.Type).toEqual({ select: { name: "Guide" } });
@@ -491,7 +491,7 @@ describe("dispatchDraft — defaults applied per docType", () => {
 				artifactCategoryIds: [CATEGORY_ID],
 			}),
 		});
-		const perClient = makePerClient(["notion-state"]);
+		const perClient = makePerClient([HOME_CLIENT_ID]);
 		const deps = makeDeps({
 			homeApi,
 			perClient,
@@ -499,7 +499,7 @@ describe("dispatchDraft — defaults applied per docType", () => {
 			categoryMap: { [CATEGORY_ID]: "StatusUpdate" },
 		});
 		await dispatchDraft({ draftPageId: DRAFT_ID }, deps);
-		const create = vi.mocked(perClient["notion-state"]!.sdk.pages.create)
+		const create = vi.mocked(perClient[HOME_CLIENT_ID]!.sdk.pages.create)
 			.mock.calls[0]?.[0];
 		if (!create?.properties) throw new Error("expected properties");
 		expect(create.properties.Date).toEqual({ date: { start: "2026-05-20" } });
@@ -516,7 +516,7 @@ describe("dispatchDraft — defaults applied per docType", () => {
 				artifactCategoryIds: [CATEGORY_ID],
 			}),
 		});
-		const perClient = makePerClient(["notion-state"]);
+		const perClient = makePerClient([HOME_CLIENT_ID]);
 		const deps = makeDeps({
 			homeApi,
 			perClient,
@@ -524,7 +524,7 @@ describe("dispatchDraft — defaults applied per docType", () => {
 			categoryMap: { [CATEGORY_ID]: "Deliverable" },
 		});
 		await dispatchDraft({ draftPageId: DRAFT_ID }, deps);
-		const create = vi.mocked(perClient["notion-state"]!.sdk.pages.create)
+		const create = vi.mocked(perClient[HOME_CLIENT_ID]!.sdk.pages.create)
 			.mock.calls[0]?.[0];
 		if (!create?.properties) throw new Error("expected properties");
 		expect(create.properties.Status).toEqual({ status: { name: "Not Started" } });

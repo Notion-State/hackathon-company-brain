@@ -65,13 +65,13 @@ const displayNames: Record<string, string> = Object.fromEntries(
 		process.env[`CLIENT_DISPLAY_NAME_${c.id.toUpperCase()}`]?.trim() || c.id,
 	]),
 );
-displayNames["notion-state"] =
+displayNames[HOME_CLIENT_ID] =
 	process.env.NS_OS_DISPLAY_NAME?.trim() || "Notion State OS";
 
 // Dispatcher deps are lazy: the home API + artifact-category resolver only
 // matter when a dispatch call actually fires. Building them at module init
 // would throw `ClientNotConfigured` for installations that haven't onboarded
-// the `notion-state` client yet — which would break the older `pushToClient`
+// the `notionstate` client yet — which would break the older `pushToClient`
 // tool that doesn't need them.
 let dispatcherDepsCache: DispatcherDeps | null = null;
 function getDispatcherDeps(): DispatcherDeps {
@@ -274,7 +274,7 @@ worker.tool("dispatchDraft", {
 		allowProduction: j
 			.boolean()
 			.describe(
-				"Required true only when the resolved client is in production mode; staging clients (and notion-state) ignore this flag.",
+				"Required true only when the resolved client is in production mode; staging clients (and notionstate) ignore this flag.",
 			)
 			.nullable(),
 	}),

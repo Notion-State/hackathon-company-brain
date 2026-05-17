@@ -28,7 +28,7 @@ Per-client config (all keyed by the same uppercase `<ID>` suffix; the parsed cli
 | `COMPANY_PAGE_<ID>` | yes for `dispatchDraft` | — | Page id (with or without dashes) of the client's row in our workspace's Companies DB. The dispatcher reads the draft's `Company` relation and looks it up here to pick the right Client OS destination. |
 | `CLIENT_DISPLAY_NAME_<ID>` | no | `<id>` | Friendly name used in the AI Drafts `Location` markdown link text (e.g., "Aduro Advisors"). |
 
-Reserved `notion-state` client (home workspace, used by the dispatcher for "Send to Notion State OS"):
+Reserved `notionstate` client (home workspace, used by the dispatcher for "Send to Notion State OS"):
 
 | Var | Required? | Default | Description |
 |---|---|---|---|
@@ -45,7 +45,7 @@ Worker-level config for the dispatcher:
 |---|---|---|---|
 | `DRAFTS_REGISTRY_ARTIFACT_CATEGORIES_DS` | yes for `dispatchDraft` | — | Data source id of the Artifact Categories registry inside our workspace. Today: `6d03178d-90aa-47cf-912a-459e1ff7983d`. |
 
-All three destination DB ids are required per client. Partial config throws at module-init. The dispatcher's deps are constructed lazily — installations that haven't onboarded `notion-state` yet can still use the `pushToClient` tool.
+All three destination DB ids are required per client. Partial config throws at module-init. The dispatcher's deps are constructed lazily — installations that haven't onboarded `notionstate` yet can still use the `pushToClient` tool.
 
 See `.env.example`.
 
