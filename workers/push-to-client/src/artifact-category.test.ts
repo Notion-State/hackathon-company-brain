@@ -54,7 +54,10 @@ function makeApi(
 				list: vi.fn(async () => ({ results: [], has_more: false })),
 			},
 		},
-		users: { list: vi.fn(async () => ({ results: [] })) },
+		users: {
+			list: vi.fn(async () => ({ results: [] })),
+			retrieve: vi.fn(async () => ({})),
+		},
 	};
 	return {
 		api: {

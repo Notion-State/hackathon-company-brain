@@ -12,7 +12,7 @@ Destination databases follow the canonical **Transformation Hub** schema (https:
 | `dispatchDraft` | tool | — | Reads an AI Drafts row, routes it to one or both destinations based on its `Status`, and writes back `Status` + `Location`. The orchestrator above `pushToClient`. |
 | `onDraftStatusChange` | webhook | — | Receives Notion-database-automation posts when an AI Drafts row's `Status` changes. Calls `dispatchDraft` per event. Production-mode pushes from the webhook always run with `allowProduction=false`; trigger production from a human-invoked `dispatchDraft` tool call instead. |
 
-Per-doc-type destination contract documented in [SCHEMA.md](../../SCHEMA.md). Clients clone each destination DB from the Transformation Hub template and add a `Brain ID` (rich_text) property — our augmentation for idempotency.
+Per-doc-type destination contract documented in [SCHEMA.md](../../SCHEMA.md). Clients clone each destination DB from the Transformation Hub template and add a `Brain ID` (rich_text) property — our augmentation for idempotency. The Deliverables clone additionally needs an `Owner` (people) column we add for the DRI handoff; preflight throws if it's missing.
 
 ## Required env
 
@@ -20,7 +20,7 @@ Per-client config (all keyed by the same uppercase `<ID>` suffix; the parsed cli
 
 | Var | Required? | Default | Description |
 |---|---|---|---|
-| `CLIENT_TOKEN_<ID>` | yes | — | The client's Notion internal-integration token (`ntn_...`). Grant: Read / Update / Insert content + "Read user information including email addresses" (for Presenter resolution). |
+| `CLIENT_TOKEN_<ID>` | yes | — | The client's Notion internal-integration token (`ntn_...`). Grant: Read / Update / Insert content + "Read user information including email addresses" (for Presenter / Owner resolution). |
 | `CLIENT_DOCS_DB_<ID>` | yes | — | Destination database id for `docType=Docs`. |
 | `CLIENT_STATUS_UPDATES_DB_<ID>` | yes | — | Destination database id for `docType=StatusUpdate`. |
 | `CLIENT_DELIVERABLES_DB_<ID>` | yes | — | Destination database id for `docType=Deliverable`. |
@@ -213,6 +213,7 @@ The page body is rendered to a markdown subset (paragraphs / H1-H3 / lists / fen
 
 - **Relations not set.** Docs `Project` and Status Updates `Event` are relations to other databases in the client's workspace. We don't know the destination-side page ids, so we leave those properties empty — the client links them manually post-push. Documented in SCHEMA.md.
 - **Presenter is best-effort.** On Status Updates, `presenterEmail` is resolved against the destination workspace's user list via `users.list`. If no match, the push succeeds with `Presenter` empty and a warning is returned. The client can add the user to the workspace and re-push, or set the property manually.
+- **Owner is best-effort.** On Deliverables, the `Owner` column must exist on the destination (preflight fails closed) but the data is best-effort: the dispatcher reads the first `DRI` from the draft, resolves it to an email via the home workspace's `users.retrieve`, then re-resolves that email per destination workspace. Cross-workspace (e.g., a home-workspace DRI on a client push) typically lands an empty `Owner` array + warning — the client adds the user to the workspace and re-pushes to populate.
 - **Push-once, read-only after.** A second push with the same `(brainId, docType)` returns `already_pushed` without writing. There is no update flow in MVP — correcting a pushed page requires the client to delete and re-trigger from the source.
 - **Markdown subset only.** Tables, images, inline HTML, nested lists, task lists, footnotes are not supported. The translator emits warnings; unsupported lines are rendered as plain paragraphs where possible.
 - **One destination DB per type.** Each destination database must contain exactly one data source. Multi-source destinations are rejected at preflight.

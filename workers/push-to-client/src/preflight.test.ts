@@ -41,6 +41,7 @@ function makeApi(
 	const blocksAppend = vi.fn<NotionSdkSubset["blocks"]["children"]["append"]>(async () => ({}));
 	const blocksList = vi.fn<NotionSdkSubset["blocks"]["children"]["list"]>(async () => ({ results: [], has_more: false }));
 	const usersList = vi.fn<NotionSdkSubset["users"]["list"]>(async () => ({ results: [] }));
+	const usersRetrieve = vi.fn<NotionSdkSubset["users"]["retrieve"]>(async () => ({}));
 	const pacerWait = vi.fn<() => Promise<void>>(async () => undefined);
 
 	const sdk: NotionSdkSubset = {
@@ -48,7 +49,7 @@ function makeApi(
 		dataSources: { retrieve: dsRetrieve, query: dsQuery },
 		pages: { create: pagesCreate, retrieve: pagesRetrieve, update: pagesUpdate },
 		blocks: { children: { append: blocksAppend, list: blocksList } },
-		users: { list: usersList },
+		users: { list: usersList, retrieve: usersRetrieve },
 	};
 	let cached: Promise<Map<string, string>> | null = null;
 	const api: ClientApi = {
@@ -146,6 +147,7 @@ function defaultDsResponseFor(dsId: string) {
 					},
 				},
 				Timeline: { type: "date" },
+				Owner: { type: "people" },
 			},
 		};
 	}
@@ -239,6 +241,35 @@ describe("verifyDestSchema — Deliverable", () => {
 		const schema = await verifyDestSchema(api, "Deliverable");
 		expect(schema.statusOptions.has("Not Started")).toBe(true);
 		expect(schema.typeOptions.size).toBe(0);
+	});
+
+	it("throws when required Owner property is missing", async () => {
+		const ds = defaultDsResponseFor(`${DELIV_DB}_ds`);
+		delete (ds.properties as Record<string, unknown>).Owner;
+		const { api } = makeApi({ dsResponses: { [`${DELIV_DB}_ds`]: ds } });
+		await expect(verifyDestSchema(api, "Deliverable")).rejects.toMatchObject({
+			details: { missing: ["Owner"] },
+		});
+	});
+
+	it("throws on wrong type for Owner (e.g. select instead of people)", async () => {
+		const ds = defaultDsResponseFor(`${DELIV_DB}_ds`);
+		(ds.properties as Record<string, unknown>).Owner = { type: "select" };
+		const { api } = makeApi({ dsResponses: { [`${DELIV_DB}_ds`]: ds } });
+		try {
+			await verifyDestSchema(api, "Deliverable");
+			expect.unreachable("should have thrown");
+		} catch (e) {
+			if (e instanceof DestinationSchemaMismatch) {
+				expect(e.details.wrongType).toContainEqual({
+					name: "Owner",
+					expected: "people",
+					actual: "select",
+				});
+			} else {
+				throw e;
+			}
+		}
 	});
 });
 

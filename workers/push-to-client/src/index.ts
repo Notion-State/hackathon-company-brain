@@ -110,7 +110,7 @@ worker.tool("pushToClient", {
 		"- DestinationSchemaMismatch — destination DB missing properties or has unknown Status/Type values.",
 		"Other errors (RateLimited, IntegrationRevoked, ClientApiError) are operational; report them.",
 		"",
-		"Relations (`Project` on Docs, `Event` on Status Updates) are NOT set — the client links them manually. `presenterEmail` is best-effort resolved via `users.list`; unmatched emails are skipped with a warning.",
+		"Relations (`Project` on Docs, `Event` on Status Updates) are NOT set — the client links them manually. `presenterEmail` (StatusUpdate) and `ownerEmail` (Deliverable) are best-effort resolved via `users.list`; unmatched emails are skipped with a warning.",
 	].join("\n"),
 	schema: j.object({
 		clientId: j
@@ -191,6 +191,12 @@ worker.tool("pushToClient", {
 				"Deliverable only — optional. ISO 8601 end of the deliverable's timeline; pair with timelineStart to write a date range. Pass null/omit for a single-day timeline.",
 			)
 			.nullable(),
+		ownerEmail: j
+			.string()
+			.describe(
+				"Deliverable only — optional payload field, but the destination DB's `Owner` (people) column is required and preflight will fail closed if it's missing. Best-effort resolved against the destination workspace's users; if no match (or null), the `Owner` field is written as an empty people array and a warning is returned.",
+			)
+			.nullable(),
 		allowProduction: j
 			.boolean()
 			.describe(
@@ -245,7 +251,7 @@ worker.tool("dispatchDraft", {
 		"- `Send to Notion State OS` → Notion State OS only → `In Notion State OS`.",
 		"Already-complete drafts (`In Both` / `In Client Workspace` / `In Notion State OS` / `Archive`) are an idempotent no-op.",
 		"",
-		"Reads `Artifact Category` → `docType` (Feature Requests rejected) and, for Client OS routes, `Company` → COMPANY_PAGE_<ID>. Per-docType required fields not on the draft get sensible defaults (Type=Guide, Status=Drafting, Date=today, etc.) the destination consultant edits.",
+		"Reads `Artifact Category` → `docType` (Feature Requests rejected) and, for Client OS routes, `Company` → COMPANY_PAGE_<ID>. For Deliverables, reads the first `DRI` (people) on the draft and resolves it to an email via the home workspace; each destination side re-resolves that email to its own user id (best-effort — unresolved lands an empty `Owner` + warning). Per-docType required fields not on the draft get sensible defaults (Type=Guide, Status=Drafting, Date=today, etc.) the destination consultant edits.",
 		"",
 		"Failure modes: UnpushableArtifactCategory (Feature Requests); MissingClientForCompany / MissingDraftRelation (fix the draft or env); DraftDispatchFailure (one side failed — Status stays in originating Send to …; Brain ID dedup makes retry safe).",
 	].join("\n"),
@@ -354,6 +360,7 @@ type ToolInputFields = {
 	addressed?: boolean | null;
 	timelineStart?: string | null;
 	timelineEnd?: string | null;
+	ownerEmail?: string | null;
 };
 
 function assemblePayload(docType: DocType, input: ToolInputFields): PushPayload {
@@ -393,6 +400,7 @@ function assemblePayload(docType: DocType, input: ToolInputFields): PushPayload 
 				status: input.status ?? "",
 				timelineStart: input.timelineStart ?? "",
 				timelineEnd: input.timelineEnd ?? null,
+				ownerEmail: input.ownerEmail ?? null,
 				bodyMarkdown: input.bodyMarkdown ?? null,
 			};
 	}

@@ -70,13 +70,14 @@ function makeApi(opts: MakeApiOpts = {}) {
 		async () => ({ results: [], has_more: false }),
 	);
 	const usersList = vi.fn<NotionSdkSubset["users"]["list"]>(async () => ({ results: [] }));
+	const usersRetrieve = vi.fn<NotionSdkSubset["users"]["retrieve"]>(async () => ({}));
 
 	const sdk: NotionSdkSubset = {
 		databases: { retrieve: dbRetrieve },
 		dataSources: { retrieve: dsRetrieve, query: dsQuery },
 		pages: { create: pagesCreate, retrieve: pagesRetrieve, update: pagesUpdate },
 		blocks: { children: { append: blocksAppend, list: blocksList } },
-		users: { list: usersList },
+		users: { list: usersList, retrieve: usersRetrieve },
 	};
 	const usersMap = opts.usersByEmail ?? new Map<string, string>();
 	const api: ClientApi = {
@@ -303,6 +304,54 @@ describe("pushToClient — Deliverable", () => {
 				{ api, preflight },
 			),
 		).rejects.toMatchObject({ details: { unknownStatus: "Mystery" } });
+	});
+
+	it("populates Owner.people when ownerEmail resolves to a workspace user", async () => {
+		const usersByEmail = new Map([["dri@example.com", "user_dri"]]);
+		const { api, pagesCreate } = makeApi({ usersByEmail });
+		const preflight = preflightWith(api, { Deliverable: schemaFor("Deliverable") });
+		const out = await pushToClient(
+			{
+				clientId: "acme",
+				payload: deliverablePayload({ ownerEmail: "dri@example.com" }),
+			},
+			{ api, preflight },
+		);
+		const arg = pagesCreate.mock.calls[0]?.[0] as CreateArg | undefined;
+		if (!arg?.properties) throw new Error("expected properties");
+		expect(arg.properties.Owner).toEqual({
+			people: [{ id: "user_dri", object: "user" }],
+		});
+		expect(out.warnings.some((w) => /Owner email/i.test(w))).toBe(false);
+	});
+
+	it("warns and emits empty Owner when ownerEmail does not match any destination user", async () => {
+		const { api, pagesCreate } = makeApi({ usersByEmail: new Map() });
+		const preflight = preflightWith(api, { Deliverable: schemaFor("Deliverable") });
+		const out = await pushToClient(
+			{
+				clientId: "acme",
+				payload: deliverablePayload({ ownerEmail: "unknown@example.com" }),
+			},
+			{ api, preflight },
+		);
+		expect(out.warnings.some((w) => /Owner email/i.test(w))).toBe(true);
+		const arg = pagesCreate.mock.calls[0]?.[0] as CreateArg | undefined;
+		if (!arg?.properties) throw new Error("expected properties");
+		expect(arg.properties.Owner).toEqual({ people: [] });
+	});
+
+	it("warns about empty Owner when ownerEmail is null (DRI was empty on the draft)", async () => {
+		const { api, pagesCreate } = makeApi();
+		const preflight = preflightWith(api, { Deliverable: schemaFor("Deliverable") });
+		const out = await pushToClient(
+			{ clientId: "acme", payload: deliverablePayload({ ownerEmail: null }) },
+			{ api, preflight },
+		);
+		expect(out.warnings.some((w) => /Owner email was empty|Owner left blank/i.test(w))).toBe(true);
+		const arg = pagesCreate.mock.calls[0]?.[0] as CreateArg | undefined;
+		if (!arg?.properties) throw new Error("expected properties");
+		expect(arg.properties.Owner).toEqual({ people: [] });
 	});
 });
 

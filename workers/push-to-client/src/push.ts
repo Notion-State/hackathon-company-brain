@@ -104,12 +104,34 @@ export async function pushToClient(
 		}
 	}
 
+	// Owner resolution (Deliverable only). Schema-required, data best-effort:
+	// the property key is always emitted (`Owner: []` when unresolved). Missing
+	// destination column is impossible — preflight would have thrown.
+	let ownerUserId: string | undefined;
+	if (input.payload.docType === "Deliverable") {
+		const ownerEmail = input.payload.ownerEmail ?? "";
+		if (!ownerEmail) {
+			warnings.push(
+				"Deliverable push has no owner email; Owner left blank. Set the draft's DRI (or pass `ownerEmail`) and re-push to populate.",
+			);
+		} else {
+			const userId = await resolveUserByEmail(deps.api, ownerEmail);
+			if (userId) {
+				ownerUserId = userId;
+			} else {
+				warnings.push(
+					`Owner email "${ownerEmail}" did not match any user in the destination workspace; field left empty. Add the user to the workspace and re-push to populate.`,
+				);
+			}
+		}
+	}
+
 	const { blocks, warnings: mdWarnings } = markdownToBlocks(
 		input.payload.bodyMarkdown,
 	);
 	for (const w of mdWarnings) warnings.push(w);
 
-	const props = buildPropertiesFor(input.payload, schema, presenterUserId);
+	const props = buildPropertiesFor(input.payload, schema, presenterUserId, ownerUserId);
 
 	const firstChunk = blocks.slice(0, MAX_PAGE_CREATE_CHILDREN);
 	const rest = blocks.slice(MAX_PAGE_CREATE_CHILDREN);

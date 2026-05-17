@@ -22,10 +22,12 @@ const CATEGORY_ID = "category_doc";
 function makeHomeSdk(opts: {
 	page?: unknown;
 	updateThrows?: unknown;
+	usersById?: Record<string, { email?: string; type?: string }>;
 }): {
 	sdk: NotionSdkSubset;
 	pagesRetrieve: ReturnType<typeof vi.fn<NotionSdkSubset["pages"]["retrieve"]>>;
 	pagesUpdate: ReturnType<typeof vi.fn<NotionSdkSubset["pages"]["update"]>>;
+	usersRetrieve: ReturnType<typeof vi.fn<NotionSdkSubset["users"]["retrieve"]>>;
 } {
 	const pagesRetrieve = vi.fn<NotionSdkSubset["pages"]["retrieve"]>(async () => opts.page ?? {});
 	const pagesUpdate = vi.fn<NotionSdkSubset["pages"]["update"]>(async () => {
@@ -36,6 +38,15 @@ function makeHomeSdk(opts: {
 		results: [],
 		has_more: false,
 	}));
+	const usersRetrieve = vi.fn<NotionSdkSubset["users"]["retrieve"]>(async (args) => {
+		const stub = opts.usersById?.[args.user_id];
+		if (!stub) return { id: args.user_id, type: "person", person: {} };
+		return {
+			id: args.user_id,
+			type: stub.type ?? "person",
+			person: stub.email ? { email: stub.email } : {},
+		};
+	});
 	const sdk: NotionSdkSubset = {
 		databases: { retrieve: vi.fn(async () => ({})) },
 		dataSources: {
@@ -53,20 +64,25 @@ function makeHomeSdk(opts: {
 				list: blocksList,
 			},
 		},
-		users: { list: vi.fn(async () => ({ results: [] })) },
+		users: {
+			list: vi.fn(async () => ({ results: [] })),
+			retrieve: usersRetrieve,
+		},
 	};
-	return { sdk, pagesRetrieve, pagesUpdate };
+	return { sdk, pagesRetrieve, pagesUpdate, usersRetrieve };
 }
 
 function makeHomeApi(opts: {
 	page?: unknown;
 	updateThrows?: unknown;
+	usersById?: Record<string, { email?: string; type?: string }>;
 }): {
 	api: HomeApi;
 	pagesRetrieve: ReturnType<typeof vi.fn<NotionSdkSubset["pages"]["retrieve"]>>;
 	pagesUpdate: ReturnType<typeof vi.fn<NotionSdkSubset["pages"]["update"]>>;
+	usersRetrieve: ReturnType<typeof vi.fn<NotionSdkSubset["users"]["retrieve"]>>;
 } {
-	const { sdk, pagesRetrieve, pagesUpdate } = makeHomeSdk(opts);
+	const { sdk, pagesRetrieve, pagesUpdate, usersRetrieve } = makeHomeSdk(opts);
 	return {
 		api: {
 			id: HOME_CLIENT_ID,
@@ -75,6 +91,7 @@ function makeHomeApi(opts: {
 		},
 		pagesRetrieve,
 		pagesUpdate,
+		usersRetrieve,
 	};
 }
 
@@ -101,7 +118,10 @@ function makePerClient(ids: string[]): Record<string, ClientApi> {
 					list: vi.fn(async () => ({ results: [], has_more: false })),
 				},
 			},
-			users: { list: vi.fn(async () => ({ results: [] })) },
+			users: {
+			list: vi.fn(async () => ({ results: [] })),
+			retrieve: vi.fn(async () => ({})),
+		},
 		};
 		out[id] = {
 			id,
@@ -208,6 +228,7 @@ function draftPage(opts: {
 	artifactCategoryIds?: string[];
 	companyIds?: string[];
 	sourceExcerpt?: string;
+	driUserIds?: string[];
 }): unknown {
 	return {
 		object: "page",
@@ -236,6 +257,10 @@ function draftPage(opts: {
 			Company: {
 				type: "relation",
 				relation: (opts.companyIds ?? []).map((id) => ({ id })),
+			},
+			DRI: {
+				type: "people",
+				people: (opts.driUserIds ?? []).map((id) => ({ id, object: "user" })),
 			},
 		},
 	};
@@ -529,6 +554,128 @@ describe("dispatchDraft — defaults applied per docType", () => {
 		if (!create?.properties) throw new Error("expected properties");
 		expect(create.properties.Status).toEqual({ status: { name: "Not Started" } });
 		expect(create.properties.Timeline).toEqual({ date: { start: "2026-05-20" } });
+	});
+});
+
+describe("dispatchDraft — Deliverable Owner from DRI", () => {
+	it("resolves first DRI user via home users.retrieve and emits empty Owner when destination workspace can't match the email", async () => {
+		const { api: homeApi, usersRetrieve } = makeHomeApi({
+			page: draftPage({
+				statusName: "Send to Notion State OS",
+				titleText: "Owner from DRI",
+				artifactCategoryIds: [CATEGORY_ID],
+				driUserIds: ["dri_user_1"],
+			}),
+			usersById: {
+				dri_user_1: { email: "owner@x.com" },
+			},
+		});
+		const perClient = makePerClient([HOME_CLIENT_ID]);
+		const deps = makeDeps({
+			homeApi,
+			perClient,
+			docType: "Deliverable",
+			categoryMap: { [CATEGORY_ID]: "Deliverable" },
+		});
+
+		await dispatchDraft({ draftPageId: DRAFT_ID }, deps);
+
+		expect(usersRetrieve).toHaveBeenCalledWith({ user_id: "dri_user_1" });
+		const create = vi.mocked(perClient[HOME_CLIENT_ID]!.sdk.pages.create)
+			.mock.calls[0]?.[0];
+		if (!create?.properties) throw new Error("expected properties");
+		// Destination workspace mock has no users → email doesn't resolve → empty Owner.
+		expect(create.properties.Owner).toEqual({ people: [] });
+	});
+
+	it("emits empty Owner when DRI is empty on the draft (no home users.retrieve call)", async () => {
+		const { api: homeApi, usersRetrieve } = makeHomeApi({
+			page: draftPage({
+				statusName: "Send to Notion State OS",
+				titleText: "No DRI",
+				artifactCategoryIds: [CATEGORY_ID],
+				driUserIds: [],
+			}),
+		});
+		const perClient = makePerClient([HOME_CLIENT_ID]);
+		const deps = makeDeps({
+			homeApi,
+			perClient,
+			docType: "Deliverable",
+			categoryMap: { [CATEGORY_ID]: "Deliverable" },
+		});
+
+		await dispatchDraft({ draftPageId: DRAFT_ID }, deps);
+
+		expect(usersRetrieve).not.toHaveBeenCalled();
+		const create = vi.mocked(perClient[HOME_CLIENT_ID]!.sdk.pages.create)
+			.mock.calls[0]?.[0];
+		if (!create?.properties) throw new Error("expected properties");
+		expect(create.properties.Owner).toEqual({ people: [] });
+	});
+
+	it("picks the first DRI user and logs the dropped ones when multiple are set", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		const { api: homeApi, usersRetrieve } = makeHomeApi({
+			page: draftPage({
+				statusName: "Send to Notion State OS",
+				titleText: "Multi DRI",
+				artifactCategoryIds: [CATEGORY_ID],
+				driUserIds: ["dri_first", "dri_second", "dri_third"],
+			}),
+			usersById: {
+				dri_first: { email: "first@x.com" },
+			},
+		});
+		const perClient = makePerClient([HOME_CLIENT_ID]);
+		const deps = makeDeps({
+			homeApi,
+			perClient,
+			docType: "Deliverable",
+			categoryMap: { [CATEGORY_ID]: "Deliverable" },
+		});
+
+		await dispatchDraft({ draftPageId: DRAFT_ID }, deps);
+
+		expect(usersRetrieve).toHaveBeenCalledTimes(1);
+		expect(usersRetrieve).toHaveBeenCalledWith({ user_id: "dri_first" });
+		expect(warn).toHaveBeenCalledWith(
+			"dispatch-draft: multiple DRI users; using first",
+			expect.objectContaining({
+				picked: "dri_first",
+				ignored: ["dri_second", "dri_third"],
+			}),
+		);
+		warn.mockRestore();
+	});
+
+	it("emits empty Owner when home users.retrieve returns a bot (no email path)", async () => {
+		const { api: homeApi, usersRetrieve } = makeHomeApi({
+			page: draftPage({
+				statusName: "Send to Notion State OS",
+				titleText: "Bot DRI",
+				artifactCategoryIds: [CATEGORY_ID],
+				driUserIds: ["bot_user"],
+			}),
+			usersById: {
+				bot_user: { type: "bot" },
+			},
+		});
+		const perClient = makePerClient([HOME_CLIENT_ID]);
+		const deps = makeDeps({
+			homeApi,
+			perClient,
+			docType: "Deliverable",
+			categoryMap: { [CATEGORY_ID]: "Deliverable" },
+		});
+
+		await dispatchDraft({ draftPageId: DRAFT_ID }, deps);
+
+		expect(usersRetrieve).toHaveBeenCalledTimes(1);
+		const create = vi.mocked(perClient[HOME_CLIENT_ID]!.sdk.pages.create)
+			.mock.calls[0]?.[0];
+		if (!create?.properties) throw new Error("expected properties");
+		expect(create.properties.Owner).toEqual({ people: [] });
 	});
 });
 

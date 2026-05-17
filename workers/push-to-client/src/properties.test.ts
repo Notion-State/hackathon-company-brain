@@ -181,11 +181,18 @@ describe("buildPropertiesFor — Deliverable", () => {
 		};
 	}
 
-	it("emits Title + Brain ID + Status + Timeline (single date) when no end", () => {
+	it("emits Title + Brain ID + Status + Timeline + Owner (empty) when no ownerUserId", () => {
 		const out = buildPropertiesFor(payload(), schema());
-		expect(Object.keys(out).sort()).toEqual(["Brain ID", "Status", "Timeline", "Title"]);
+		expect(Object.keys(out).sort()).toEqual([
+			"Brain ID",
+			"Owner",
+			"Status",
+			"Timeline",
+			"Title",
+		]);
 		expect(out.Timeline).toEqual({ date: { start: "2026-05-15" } });
 		expect(out.Status).toEqual({ status: { name: "In Progress" } });
+		expect(out.Owner).toEqual({ people: [] });
 	});
 
 	it("emits Timeline with end when timelineEnd is set", () => {
@@ -196,5 +203,27 @@ describe("buildPropertiesFor — Deliverable", () => {
 		expect(out.Timeline).toEqual({
 			date: { start: "2026-05-15", end: "2026-06-30" },
 		});
+	});
+
+	it("populates Owner.people when ownerUserId is provided", () => {
+		const out = buildPropertiesFor(
+			payload({ ownerEmail: "dri@x.com" }),
+			schema(),
+			undefined,
+			"user_dri",
+		);
+		expect(out.Owner).toEqual({
+			people: [{ id: "user_dri", object: "user" }],
+		});
+	});
+
+	it("emits empty Owner array when ownerUserId is undefined (resolution failed or empty DRI)", () => {
+		const out = buildPropertiesFor(
+			payload({ ownerEmail: "dri@x.com" }),
+			schema(),
+			undefined,
+			undefined,
+		);
+		expect(out.Owner).toEqual({ people: [] });
 	});
 });

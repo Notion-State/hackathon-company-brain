@@ -57,7 +57,8 @@ export type PayloadField =
 	| "presenterEmail"
 	| "addressed"
 	| "timelineStart"
-	| "timelineEnd";
+	| "timelineEnd"
+	| "ownerEmail";
 
 export const DOC_TYPE_SPECS: Record<DocType, DocTypeSpec> = {
 	Docs: {
@@ -92,6 +93,7 @@ export const DOC_TYPE_SPECS: Record<DocType, DocTypeSpec> = {
 		requiredProperties: [
 			{ name: "Status", type: "status", hasOptions: true },
 			{ name: "Timeline", type: "date" },
+			{ name: "Owner", type: "people" },
 		],
 		optionalProperties: [],
 		requiredPayloadFields: ["title", "status", "timelineStart"],

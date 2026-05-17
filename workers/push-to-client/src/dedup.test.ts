@@ -23,6 +23,7 @@ function makeApi(opts: { queryResponse?: unknown; throws?: unknown }) {
 	const blocksAppend = vi.fn<NotionSdkSubset["blocks"]["children"]["append"]>(async () => ({}));
 	const blocksList = vi.fn<NotionSdkSubset["blocks"]["children"]["list"]>(async () => ({ results: [], has_more: false }));
 	const usersList = vi.fn<NotionSdkSubset["users"]["list"]>(async () => ({ results: [] }));
+	const usersRetrieve = vi.fn<NotionSdkSubset["users"]["retrieve"]>(async () => ({}));
 	const pacerWait = vi.fn<() => Promise<void>>(async () => undefined);
 
 	const sdk: NotionSdkSubset = {
@@ -30,7 +31,7 @@ function makeApi(opts: { queryResponse?: unknown; throws?: unknown }) {
 		dataSources: { retrieve: dsRetrieve, query: dsQuery },
 		pages: { create: pagesCreate, retrieve: pagesRetrieve, update: pagesUpdate },
 		blocks: { children: { append: blocksAppend, list: blocksList } },
-		users: { list: usersList },
+		users: { list: usersList, retrieve: usersRetrieve },
 	};
 	let cached: Promise<Map<string, string>> | null = null;
 	const api: ClientApi = {

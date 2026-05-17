@@ -44,6 +44,7 @@ import {
 	HOME_CLIENT_ID,
 	listPageBlocks,
 	retrievePage,
+	retrieveUserEmail,
 	updatePage,
 	type HomeApi,
 } from "./home-api.js";
@@ -221,17 +222,31 @@ export async function dispatchDraft(
 	const blocks = await listPageBlocks(deps.homeApi, input.draftPageId);
 	const bodyMarkdown = renderBodyMarkdown(blocks);
 
-	// 6. Build the per-docType payload with defaults.
+	// 6. Resolve DRI (people) on the draft to an email — only when the docType
+	//    actually needs it (Deliverable). Skipping for Docs / Status Update
+	//    avoids an unnecessary `users.retrieve` API call on every dispatch
+	//    where the draft happens to have DRI set.
+	const ownerEmail =
+		docType === "Deliverable"
+			? await resolveOwnerEmailFromDraft({
+					draftPageId: input.draftPageId,
+					driUserIds: parsed.driUserIds,
+					homeApi: deps.homeApi,
+			  })
+			: "";
+
+	// 7. Build the per-docType payload with defaults.
 	const payload = buildPayloadWithDefaults({
 		docType,
 		draftPageId: input.draftPageId,
 		title: parsed.title,
 		sourceExcerpt: parsed.sourceExcerpt,
 		bodyMarkdown,
+		ownerEmail,
 		now,
 	});
 
-	// 7. Fan out.
+	// 8. Fan out.
 	const allowProduction = input.allowProduction ?? false;
 	const sideResults = await Promise.allSettled(
 		routing.sides.map((side) =>
@@ -257,7 +272,7 @@ export async function dispatchDraft(
 		}
 	}
 
-	// 8. Format Location for the successful sides only.
+	// 9. Format Location for the successful sides only.
 	const location = formatLocation(
 		pushed.map((entry): LocationEntry => ({
 			side: entry.side,
@@ -266,7 +281,7 @@ export async function dispatchDraft(
 		})),
 	);
 
-	// 9. Writeback.
+	// 10. Writeback.
 	if (failures.length > 0) {
 		// Partial failure → keep Status in the trigger value; record what landed.
 		await updatePage(deps.homeApi, input.draftPageId, {
@@ -302,11 +317,19 @@ type ParsedDraft = {
 	sourceExcerpt: string;
 	artifactCategoryIds: string[];
 	companyIds: string[];
+	driUserIds: string[];
 };
 
 export function parseDraft(response: unknown): ParsedDraft {
 	if (!isObject(response)) {
-		return { statusName: null, title: "", sourceExcerpt: "", artifactCategoryIds: [], companyIds: [] };
+		return {
+			statusName: null,
+			title: "",
+			sourceExcerpt: "",
+			artifactCategoryIds: [],
+			companyIds: [],
+			driUserIds: [],
+		};
 	}
 	const props = isObject(response.properties) ? response.properties : {};
 	return {
@@ -315,6 +338,7 @@ export function parseDraft(response: unknown): ParsedDraft {
 		sourceExcerpt: readText(props["Source Excerpt"]),
 		artifactCategoryIds: readRelationIds(props["Artifact Category"]),
 		companyIds: readRelationIds(props.Company),
+		driUserIds: readPeopleIds(props.DRI),
 	};
 }
 
@@ -352,6 +376,15 @@ function readRelationIds(value: unknown): string[] {
 	return out;
 }
 
+function readPeopleIds(value: unknown): string[] {
+	if (!isObject(value) || value.type !== "people" || !Array.isArray(value.people)) return [];
+	const out: string[] = [];
+	for (const person of value.people) {
+		if (isObject(person) && typeof person.id === "string") out.push(person.id);
+	}
+	return out;
+}
+
 function isObject(v: unknown): v is Record<string, unknown> {
 	return typeof v === "object" && v !== null;
 }
@@ -362,6 +395,7 @@ function buildPayloadWithDefaults(args: {
 	title: string;
 	sourceExcerpt: string;
 	bodyMarkdown: string;
+	ownerEmail: string;
 	now: Date;
 }): PushPayload {
 	const title = args.title || "Untitled draft";
@@ -395,9 +429,34 @@ function buildPayloadWithDefaults(args: {
 				status: "Not Started",
 				timelineStart: todayIso,
 				timelineEnd: null,
+				ownerEmail: args.ownerEmail || null,
 				bodyMarkdown: args.bodyMarkdown,
 			};
 	}
+}
+
+/**
+ * Reads the draft's first `DRI` user id and resolves it to an email via the
+ * home workspace. Returns `""` when DRI is empty or unresolvable — the push
+ * path treats that as "Owner left blank" and surfaces a warning. Multi-DRI is
+ * logged and the first entry wins, matching the multi-Company precedent.
+ */
+async function resolveOwnerEmailFromDraft(args: {
+	draftPageId: string;
+	driUserIds: string[];
+	homeApi: HomeApi;
+}): Promise<string> {
+	if (args.driUserIds.length === 0) return "";
+	const firstId = args.driUserIds[0]!;
+	if (args.driUserIds.length > 1) {
+		console.warn("dispatch-draft: multiple DRI users; using first", {
+			draftPageId: args.draftPageId,
+			picked: firstId,
+			ignored: args.driUserIds.slice(1),
+		});
+	}
+	const email = await retrieveUserEmail(args.homeApi, firstId);
+	return email ?? "";
 }
 
 async function runSide(args: {

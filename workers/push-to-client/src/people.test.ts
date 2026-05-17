@@ -56,7 +56,10 @@ function makeApi(opts: { pages: UserListResponse[]; throwsOnCallIndex?: number }
 				list: vi.fn(async () => ({ results: [], has_more: false })),
 			},
 		},
-		users: { list: usersList },
+		users: {
+			list: usersList,
+			retrieve: vi.fn(async () => ({})),
+		},
 	};
 
 	const pacerWait = vi.fn<() => Promise<void>>(async () => undefined);

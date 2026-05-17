@@ -79,6 +79,7 @@ export type PushPayload =
 			status: string;
 			timelineStart: string;
 			timelineEnd?: string | null;
+			ownerEmail?: string | null;
 			bodyMarkdown?: string | null;
 	  };
 
@@ -88,14 +89,18 @@ export type PushPayload =
  * both the payload value is present AND the destination schema records the
  * property as available.
  *
- * `presenterUserId` (StatusUpdate only) is the email-resolved Notion user id.
- * If `undefined`, the Presenter property is skipped — the caller is expected
- * to have emitted a warning to the agent.
+ * `presenterUserId` (StatusUpdate only) and `ownerUserId` (Deliverable only)
+ * are email-resolved Notion user ids. When `undefined`, the corresponding
+ * people property is emitted with an empty array — the caller is expected
+ * to have emitted a warning to the agent. Owner is schema-required, so the
+ * key is always present (just empty); Presenter is schema-optional and
+ * omitted entirely when unresolved.
  */
 export function buildPropertiesFor(
 	payload: PushPayload,
 	schema: DestSchema,
 	presenterUserId?: string,
+	ownerUserId?: string,
 ): PageProperties {
 	switch (payload.docType) {
 		case "Docs":
@@ -103,7 +108,7 @@ export function buildPropertiesFor(
 		case "StatusUpdate":
 			return buildStatusUpdate(payload, schema, presenterUserId);
 		case "Deliverable":
-			return buildDeliverable(payload, schema);
+			return buildDeliverable(payload, schema, ownerUserId);
 	}
 }
 
@@ -147,6 +152,7 @@ function buildStatusUpdate(
 function buildDeliverable(
 	payload: Extract<PushPayload, { docType: "Deliverable" }>,
 	_schema: DestSchema,
+	ownerUserId?: string,
 ): PageProperties {
 	const titleProp = DOC_TYPE_SPECS.Deliverable.titleProperty.name; // "Title"
 	return {
@@ -154,6 +160,7 @@ function buildDeliverable(
 		[BRAIN_ID_PROPERTY]: properties.richText(payload.brainId),
 		Status: properties.status(payload.status),
 		Timeline: properties.dateRange(payload.timelineStart, payload.timelineEnd),
+		Owner: properties.people(ownerUserId ? [ownerUserId] : []),
 	};
 }
 

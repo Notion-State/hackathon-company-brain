@@ -190,6 +190,7 @@ Preflight is per-`docType`: it resolves the configured database id to its single
 | `Brain ID` | rich_text | yes | Our augmentation. Idempotency key. |
 | `Status` | status | yes | Options: `Not Started` / `Planning` / `In Progress` / `In Review` / `Ongoing` / `Postponed` / `Blocked` / `Done` / `Propose Delete`. Push-time validated against the destination's option set. |
 | `Timeline` | date | yes | From `payload.timelineStart` (single date) or `(timelineStart, timelineEnd)` (date range). |
+| `Owner` | people | yes (column) | **Best-effort data.** The column must exist on the destination — preflight throws `DestinationSchemaMismatch` if missing. When `payload.ownerEmail` is set, we resolve it against the destination workspace's users via `users.list` and write the matching user id. Unresolved (cross-workspace, no published email, etc.) or empty → property written as `{ people: [] }` and a warning is returned. The dispatcher fills `ownerEmail` from the draft's `DRI` people property. |
 
 #### Page body
 
@@ -201,7 +202,7 @@ None. These are write-only destinations — `pushToClient` creates one page per 
 
 #### Client onboarding
 
-See `workers/push-to-client/README.md` for the onboarding checklist: clone the three destination databases from the canonical template, add `Brain ID` rich_text to each, create an internal integration with Read/Update/Insert + Read-user-emails capabilities, share each destination DB with that integration, hand us the token + the three database urls, and we wire the env.
+See `workers/push-to-client/README.md` for the onboarding checklist: clone the three destination databases from the canonical template, add `Brain ID` rich_text to each (and `Owner` people on the Deliverables clone — not in the upstream template), create an internal integration with Read/Update/Insert + Read-user-emails capabilities, share each destination DB with that integration, hand us the token + the three database urls, and we wire the env.
 
 ### `Slack Channels` (managed by `workers/ingest-slack`)
 
@@ -419,6 +420,7 @@ This worker does **not** manage the AI Drafts database (`362d3984d5b8805aa856d04
 | `Artifact Category` | relation → Artifact Categories registry (data source `6d03178d-90aa-47cf-912a-459e1ff7983d`) | read | → `docType`. Resolver title-matches registry rows: `Doc` → `Docs`, `Status Update` → `StatusUpdate`, `Deliverable` → `Deliverable`, `Feature Requests` → rejected as `UnpushableArtifactCategory`. Empty / unrecognized → `MissingDraftRelation`. |
 | `Company` | relation → Companies | read | Required for Client OS-bound routes. First entry is looked up in the configured `COMPANY_PAGE_<ID>` → `clientId` mapping; missing mapping throws `MissingClientForCompany`. Multi-entry: uses the first with a warning. |
 | `Source Excerpt` | text | read | Feeds the Status Update `summary` default (Status Update destinations require `Summary`; the Drafts DB doesn't carry it directly). Fallback when empty: draft `Name`. |
+| `DRI` | people | read | Designated owner. Feeds the Deliverable `ownerEmail` payload: first DRI's Notion user id is resolved to an email via home `users.retrieve`, then re-resolved per destination workspace. Empty / unresolvable → empty `Owner` + warning (matches Presenter semantics). Multi-entry: uses the first with a `dispatch-draft: multiple DRI users` warning. |
 | (page body blocks) | — | read | Rendered to markdown via the worker's body subset (paragraphs / H1-H3 / lists / fenced code / quotes / divider; inline bold/italic/code/link). Depth-2 recursion cap, 50 KB byte cap, unsupported block types render as `_[unsupported block: <type>]_`. |
 
 #### Trigger → destination → resulting Status
@@ -446,6 +448,7 @@ The Drafts DB does not carry the per-docType required fields the destination DBs
 | Deliverable | `status` | `"Not Started"` |
 | Deliverable | `timelineStart` | dispatch ISO date |
 | Deliverable | `timelineEnd` | (null — single-date) |
+| Deliverable | `ownerEmail` | First `DRI` on the draft, resolved to an email via home `users.retrieve`; `null` when DRI is empty or the user is a bot/group/no-email. |
 
 #### Sync sources
 

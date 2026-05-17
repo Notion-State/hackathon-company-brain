@@ -13,7 +13,10 @@ import type {
 	GetPageParameters,
 	UpdatePageParameters,
 } from "@notionhq/client/build/src/api-endpoints/pages.js";
-import type { ListUsersParameters } from "@notionhq/client/build/src/api-endpoints/users.js";
+import type {
+	GetUserParameters,
+	ListUsersParameters,
+} from "@notionhq/client/build/src/api-endpoints/users.js";
 
 import type { ClientConfig, ClientMode } from "./clients.js";
 import type { DocType } from "./doc-types.js";
@@ -49,6 +52,7 @@ export type NotionSdkSubset = {
 	};
 	users: {
 		list: (args: ListUsersParameters) => Promise<unknown>;
+		retrieve: (args: GetUserParameters) => Promise<unknown>;
 	};
 };
 

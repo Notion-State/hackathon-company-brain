@@ -81,6 +81,33 @@ export async function updatePage(
 }
 
 /**
+ * Fetches a Notion user by id and returns their email if they are a person
+ * (not a bot or group) with a published email. Returns `null` otherwise —
+ * callers treat that as "owner empty" and surface a warning.
+ *
+ * Used by the dispatcher to translate a draft's `DRI` Notion user id (home
+ * workspace) into an email so each destination side can re-resolve it
+ * against its own workspace.
+ */
+export async function retrieveUserEmail(
+	api: HomeApi,
+	userId: string,
+): Promise<string | null> {
+	let response: unknown;
+	try {
+		await api.waitForPacer();
+		response = await api.sdk.users.retrieve({ user_id: userId });
+	} catch (err) {
+		throw translateNotionError(api.id, err);
+	}
+	if (!isObject(response)) return null;
+	if (response.type !== "person") return null;
+	const person = isObject(response.person) ? response.person : null;
+	const email = person && typeof person.email === "string" ? person.email.trim() : "";
+	return email.length > 0 ? email : null;
+}
+
+/**
  * Recursively reads a page's block tree up to `maxDepth`. Returns blocks with
  * a `_children` field populated where the recursion descended. Pacer is
  * waited on once per list call (one per block-list page).
