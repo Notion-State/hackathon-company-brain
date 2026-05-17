@@ -5,6 +5,8 @@
  * the channels sync and the messages syncs go through this function so the
  * filter rules can't drift.
  *
+ * Scope: all non-archived channels (public, private, shared, externally shared).
+ *
  * `autoJoin: true` — channels sync. Bot joins any qualifying channel it isn't
  *   already in. Visible "X joined the channel" message in Slack is unavoidable.
  *
@@ -22,7 +24,8 @@ export type DiscoverOpts = { autoJoin: boolean };
  * also calls `conversations.join` on any returned channel where the bot isn't
  * already a member.
  *
- * Filter: drops archived, shared, externally-shared, and private channels.
+ * Filter: drops only archived channels. All non-archived channels (public,
+ * private, shared, externally shared) are in scope.
  * With `autoJoin: false`, additionally drops non-member channels.
  */
 export async function discoverEligibleChannels(
@@ -32,7 +35,7 @@ export async function discoverEligibleChannels(
 	const eligible: SlackChannel[] = [];
 	let cursor: string | undefined;
 	for (;;) {
-		const page = await client.listPublicChannels(cursor);
+		const page = await client.listChannels(cursor);
 		for (const ch of page.channels) {
 			if (!isEligible(ch)) continue;
 			eligible.push(ch);
@@ -58,11 +61,8 @@ export async function discoverEligibleChannels(
 	return eligible.filter((c) => c.is_member);
 }
 
-/** Pure: returns true when a channel passes the in-scope filter. */
+/** Pure: returns true when a channel passes the in-scope filter (non-archived). */
 export function isEligible(c: SlackChannel): boolean {
 	if (c.is_archived) return false;
-	if (c.is_private) return false;
-	if (c.is_shared) return false;
-	if (c.is_ext_shared) return false;
 	return true;
 }

@@ -15,10 +15,19 @@ import type { SlackChannel } from "./slack.js";
 
 const RICH_TEXT_MAX = 2000;
 
+export type ChannelType = "Public" | "Private" | "Slack Connect";
+
+export function classifyChannelType(ch: SlackChannel): ChannelType {
+	if (ch.is_ext_shared) return "Slack Connect";
+	if (ch.is_private) return "Private";
+	return "Public";
+}
+
 export type RenderChannelOpts = {
 	identity: IdentityLookup;
 	internalDomains: Set<string>;
 	teamDomain: string; // workspace subdomain for slack.com URLs; falls back to "app" upstream
+	memberEmails: string; // pre-joined comma-separated email list of channel members
 };
 
 export async function toChannelChangeProperties(
@@ -46,6 +55,11 @@ export async function toChannelChangeProperties(
 		"Member Count": Builder.number(channel.num_members),
 		"Is Member": Builder.checkbox(channel.is_member),
 		"Is Archived": Builder.checkbox(channel.is_archived),
+		"Is Private": Builder.checkbox(channel.is_private),
+		"Is Shared": Builder.checkbox(channel.is_shared),
+		"Is Externally Shared": Builder.checkbox(channel.is_ext_shared),
+		"Member Emails": Builder.richText(clip(opts.memberEmails)),
+		"Channel Type": Builder.select(classifyChannelType(channel)),
 		Created: Builder.dateTime(createdIso),
 		"Creator Email": Builder.email(creatorEmail ?? ""),
 		"Internal Creator": Builder.people(...internalCreatorEmails),
@@ -77,6 +91,10 @@ export async function renderChannelMarkdown(channel: SlackChannel, opts: RenderC
 	lines.push("");
 	lines.push(`**Purpose:** ${channel.purpose.trim() ? escapeMarkdown(channel.purpose) : "_No purpose set._"}`);
 	lines.push("");
+	if (opts.memberEmails) {
+		lines.push(`**Member Emails:** ${escapeMarkdown(opts.memberEmails)}`);
+		lines.push("");
+	}
 	lines.push(`[Open in Slack](${slackUrl})`);
 	return lines.join("\n");
 }

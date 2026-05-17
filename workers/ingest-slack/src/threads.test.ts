@@ -16,7 +16,8 @@ import { assembleThread } from "./threads.js";
 
 function makeClient(overrides: Partial<SlackClient> = {}): SlackClient {
 	const base: SlackClient = {
-		listPublicChannels: vi.fn(),
+		listChannels: vi.fn(),
+		listMembers: vi.fn(),
 		joinChannel: vi.fn(),
 		historyPage: vi.fn(),
 		repliesAll: vi.fn(),

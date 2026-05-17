@@ -24,6 +24,7 @@ function makeStubWeb(overrides: Partial<Record<string, unknown>> = {}): WebClien
 			join: vi.fn(),
 			history: vi.fn(),
 			replies: vi.fn(),
+			members: vi.fn(),
 		},
 		users: { info: vi.fn() },
 		bots: { info: vi.fn() },
@@ -66,7 +67,7 @@ describe("createSlackClient", () => {
 		expect(() => createSlackClient("", pacer)).toThrow(/token is required/);
 	});
 
-	describe("listPublicChannels", () => {
+	describe("listChannels", () => {
 		it("calls pacer.wait, returns normalized channels + cursor", async () => {
 			const web = makeStubWeb();
 			(web.conversations.list as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -78,7 +79,7 @@ describe("createSlackClient", () => {
 				response_metadata: { next_cursor: "next-page" },
 			});
 			const client = createSlackClient("xoxb-test", pacer, { web });
-			const out = await client.listPublicChannels("start-cursor");
+			const out = await client.listChannels("start-cursor");
 			expect(pacer.calls).toBe(1);
 			expect(out.nextCursor).toBe("next-page");
 			expect(out.channels).toHaveLength(2);
@@ -109,7 +110,7 @@ describe("createSlackClient", () => {
 					{ id: "C002" }, // no name
 				],
 			});
-			const out = await createSlackClient("t", pacer, { web }).listPublicChannels();
+			const out = await createSlackClient("t", pacer, { web }).listChannels();
 			expect(out.channels.map((c) => c.id)).toEqual(["C001"]);
 		});
 
@@ -120,8 +121,49 @@ describe("createSlackClient", () => {
 				channels: [],
 				response_metadata: { next_cursor: "" },
 			});
-			const out = await createSlackClient("t", pacer, { web }).listPublicChannels();
+			const out = await createSlackClient("t", pacer, { web }).listChannels();
 			expect(out.nextCursor).toBeUndefined();
+		});
+	});
+
+	describe("listMembers", () => {
+		it("paginates conversations.members and returns all user IDs", async () => {
+			const web = makeStubWeb();
+			(web.conversations.members as ReturnType<typeof vi.fn>)
+				.mockResolvedValueOnce({
+					ok: true,
+					members: ["U001", "U002"],
+					response_metadata: { next_cursor: "p2" },
+				})
+				.mockResolvedValueOnce({
+					ok: true,
+					members: ["U003"],
+					response_metadata: { next_cursor: "" },
+				});
+			const client = createSlackClient("t", pacer, { web });
+			const out = await client.listMembers("C001");
+			expect(out).toEqual(["U001", "U002", "U003"]);
+			expect(pacer.calls).toBe(2);
+		});
+
+		it("returns empty array on channel_not_found (soft fail)", async () => {
+			const web = makeStubWeb();
+			(web.conversations.members as ReturnType<typeof vi.fn>).mockRejectedValue(makePlatformError("channel_not_found"));
+			const out = await createSlackClient("t", pacer, { web }).listMembers("C999");
+			expect(out).toEqual([]);
+		});
+
+		it("returns empty array on not_in_channel (soft fail)", async () => {
+			const web = makeStubWeb();
+			(web.conversations.members as ReturnType<typeof vi.fn>).mockRejectedValue(makePlatformError("not_in_channel"));
+			const out = await createSlackClient("t", pacer, { web }).listMembers("C999");
+			expect(out).toEqual([]);
+		});
+
+		it("re-throws unexpected platform errors", async () => {
+			const web = makeStubWeb();
+			(web.conversations.members as ReturnType<typeof vi.fn>).mockRejectedValue(makePlatformError("invalid_auth"));
+			await expect(createSlackClient("t", pacer, { web }).listMembers("C001")).rejects.toThrow(/invalid_auth/);
 		});
 	});
 
@@ -357,7 +399,7 @@ describe("createSlackClient", () => {
 			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
 			const client = createSlackClient("t", pacer, { web, sleep });
-			const out = await client.listPublicChannels();
+			const out = await client.listChannels();
 			expect(sleeps).toEqual([2000]);
 			expect(pacer.calls).toBe(2); // wait before each attempt
 			expect(out.channels).toEqual([]);
@@ -369,7 +411,7 @@ describe("createSlackClient", () => {
 			(web.conversations.list as ReturnType<typeof vi.fn>).mockRejectedValue(makeRateLimitedError(1));
 			const client = createSlackClient("t", pacer, { web, sleep: () => Promise.resolve(), maxRetries: 1 });
 			vi.spyOn(console, "warn").mockImplementation(() => undefined);
-			await expect(client.listPublicChannels()).rejects.toMatchObject({ code: ErrorCode.RateLimitedError });
+			await expect(client.listChannels()).rejects.toMatchObject({ code: ErrorCode.RateLimitedError });
 		});
 	});
 });

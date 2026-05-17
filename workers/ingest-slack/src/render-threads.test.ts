@@ -4,6 +4,8 @@ import {
 	BOB_REPLY,
 	CAROL_REPLY,
 	FILE_SHARE_MESSAGE,
+	IMAGE_SHARE_MESSAGE,
+	REACTIONS_MESSAGE,
 	msg,
 } from "./fixtures/messages.js";
 import { parseInternalDomains } from "./internal-domains.js";
@@ -209,6 +211,55 @@ describe("renderThreadMarkdown", () => {
 		);
 		expect(md).toContain("_(no text)_");
 	});
+
+	it("renders image files with 🖼️ prefix and non-images with 📎", async () => {
+		const t = {
+			parent: { ...IMAGE_SHARE_MESSAGE, user: "U_ALICE", reply_count: 0 },
+			replies: [],
+			latestTs: IMAGE_SHARE_MESSAGE.ts,
+			hasAttachments: true,
+			totalReactionCount: 0,
+		};
+		const md = await renderThreadMarkdown(t, channel(), {
+			identity: makeIdentity(), internalDomains: INTERNAL, permalink: null,
+		});
+		expect(md).toContain("🖼️ [screenshot.png]");
+		expect(md).not.toContain("📎 [screenshot.png]");
+
+		// Non-image file (PDF) still gets 📎
+		const t2 = {
+			parent: { ...FILE_SHARE_MESSAGE, user: "U_ALICE", reply_count: 0 },
+			replies: [],
+			latestTs: FILE_SHARE_MESSAGE.ts,
+			hasAttachments: true,
+			totalReactionCount: 0,
+		};
+		const md2 = await renderThreadMarkdown(t2, channel(), {
+			identity: makeIdentity(), internalDomains: INTERNAL, permalink: null,
+		});
+		expect(md2).toContain("📎 [spec.pdf]");
+		expect(md2).not.toContain("🖼️ [spec.pdf]");
+	});
+
+	it("renders reactions as a blockquote line with emoji + count", async () => {
+		const t = {
+			parent: { ...REACTIONS_MESSAGE, user: "U_ALICE", reply_count: 0 },
+			replies: [],
+			latestTs: REACTIONS_MESSAGE.ts,
+			hasAttachments: false,
+			totalReactionCount: 6,
+		};
+		const md = await renderThreadMarkdown(t, channel(), {
+			identity: makeIdentity(), internalDomains: INTERNAL, permalink: null,
+		});
+		// thumbsup resolves to 👍 via alias, tada resolves to 🎉
+		expect(md).toContain("👍 3");
+		expect(md).toContain("🎉 2");
+		// Custom emoji stays as :name:
+		expect(md).toContain(":custom_company_emoji: 1");
+		// All on a blockquote line
+		expect(md).toContain("> ");
+	});
 });
 
 describe("convertSlackMrkdwn", () => {
@@ -266,5 +317,17 @@ describe("convertSlackMrkdwn", () => {
 
 	it("leaves backtick code spans untouched", async () => {
 		expect(await convertSlackMrkdwn("call `foo()` please", idLookup)).toBe("call `foo()` please");
+	});
+
+	it("converts emoji shortcodes to Unicode", async () => {
+		expect(await convertSlackMrkdwn("great :tada: let's go :rocket:", idLookup)).toBe("great 🎉 let's go 🚀");
+	});
+
+	it("leaves custom emoji shortcodes as :name:", async () => {
+		expect(await convertSlackMrkdwn("love this :custom_thing:", idLookup)).toBe("love this :custom_thing:");
+	});
+
+	it("converts Slack-specific emoji aliases", async () => {
+		expect(await convertSlackMrkdwn(":thumbsup: approved", idLookup)).toBe("👍 approved");
 	});
 });

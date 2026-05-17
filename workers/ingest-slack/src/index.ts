@@ -91,6 +91,11 @@ const channelsDb = worker.database("slack-channels-v1", {
 			"Member Count": Schema.number(),
 			"Is Member": Schema.checkbox(),
 			"Is Archived": Schema.checkbox(),
+			"Is Private": Schema.checkbox(),
+			"Is Shared": Schema.checkbox(),
+			"Is Externally Shared": Schema.checkbox(),
+			"Member Emails": Schema.richText(),
+			"Channel Type": Schema.select([{ name: "Public" }, { name: "Private" }, { name: "Slack Connect" }]),
 			Created: Schema.date(),
 			"Creator Email": Schema.email(),
 			"Internal Creator": Schema.people(),
@@ -135,11 +140,11 @@ worker.sync("slackChannelsSync", {
 	execute: async (rawState) => {
 		const state = rawState as ChannelsState;
 		const teamDomain = await getTeamDomain();
-		const page = await slack.listPublicChannels(state?.listCursor);
+		const page = await slack.listChannels(state?.listCursor);
 
 		const eligible: SlackChannel[] = [];
 		for (const ch of page.channels) {
-			if (ch.is_archived || ch.is_private || ch.is_shared || ch.is_ext_shared) continue;
+			if (ch.is_archived) continue;
 			if (!ch.is_member) {
 				const r = await slack.joinChannel(ch.id);
 				if (r.ok) ch.is_member = true;
@@ -152,7 +157,6 @@ worker.sync("slackChannelsSync", {
 		// Sequential, not Promise.all: rendering hits the identity cache and so
 		// shares the pacer with everything else. Parallelism gives no throughput
 		// gain (the pacer serializes anyway) and just bunches awaits in memory.
-		const opts = { identity, internalDomains: INTERNAL_DOMAINS, teamDomain };
 		const changes: Array<{
 			type: "upsert";
 			key: string;
@@ -160,6 +164,16 @@ worker.sync("slackChannelsSync", {
 			pageContentMarkdown: string;
 		}> = [];
 		for (const ch of eligible) {
+			// Resolve member emails for this channel
+			const memberIds = await slack.listMembers(ch.id);
+			const emails: string[] = [];
+			for (const uid of memberIds) {
+				const resolved = await identity.resolveUser(uid);
+				if (resolved.email) emails.push(resolved.email);
+			}
+			const memberEmails = emails.join(", ");
+
+			const opts = { identity, internalDomains: INTERNAL_DOMAINS, teamDomain, memberEmails };
 			changes.push({
 				type: "upsert",
 				key: ch.id,
@@ -280,7 +294,7 @@ worker.sync("slackDelta", {
 async function findChannelInList(channelId: string): Promise<SlackChannel | null> {
 	let cursor: string | undefined;
 	for (;;) {
-		const page = await slack.listPublicChannels(cursor);
+		const page = await slack.listChannels(cursor);
 		const found = page.channels.find((c) => c.id === channelId);
 		if (found) return found;
 		if (!page.nextCursor) return null;
