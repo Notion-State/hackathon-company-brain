@@ -61,16 +61,21 @@ function makeApi(opts: MakeApiOpts = {}) {
 	const pagesCreate = vi.fn<NotionSdkSubset["pages"]["create"]>(async () => {
 		return opts.createResponse ?? { id: "page_new", url: "https://notion.so/new" };
 	});
+	const pagesRetrieve = vi.fn<NotionSdkSubset["pages"]["retrieve"]>(async () => ({}));
+	const pagesUpdate = vi.fn<NotionSdkSubset["pages"]["update"]>(async () => ({}));
 	const blocksAppend = vi.fn<NotionSdkSubset["blocks"]["children"]["append"]>(
 		async () => ({ results: [] }),
+	);
+	const blocksList = vi.fn<NotionSdkSubset["blocks"]["children"]["list"]>(
+		async () => ({ results: [], has_more: false }),
 	);
 	const usersList = vi.fn<NotionSdkSubset["users"]["list"]>(async () => ({ results: [] }));
 
 	const sdk: NotionSdkSubset = {
 		databases: { retrieve: dbRetrieve },
 		dataSources: { retrieve: dsRetrieve, query: dsQuery },
-		pages: { create: pagesCreate },
-		blocks: { children: { append: blocksAppend } },
+		pages: { create: pagesCreate, retrieve: pagesRetrieve, update: pagesUpdate },
+		blocks: { children: { append: blocksAppend, list: blocksList } },
 		users: { list: usersList },
 	};
 	const usersMap = opts.usersByEmail ?? new Map<string, string>();

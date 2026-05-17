@@ -1,11 +1,18 @@
 import { Client } from "@notionhq/client";
-import type { AppendBlockChildrenParameters } from "@notionhq/client/build/src/api-endpoints/blocks.js";
+import type {
+	AppendBlockChildrenParameters,
+	ListBlockChildrenParameters,
+} from "@notionhq/client/build/src/api-endpoints/blocks.js";
 import type { GetDatabaseParameters } from "@notionhq/client/build/src/api-endpoints/databases.js";
 import type {
 	GetDataSourceParameters,
 	QueryDataSourceParameters,
 } from "@notionhq/client/build/src/api-endpoints/data-sources.js";
-import type { CreatePageParameters } from "@notionhq/client/build/src/api-endpoints/pages.js";
+import type {
+	CreatePageParameters,
+	GetPageParameters,
+	UpdatePageParameters,
+} from "@notionhq/client/build/src/api-endpoints/pages.js";
 import type { ListUsersParameters } from "@notionhq/client/build/src/api-endpoints/users.js";
 
 import type { ClientConfig, ClientMode } from "./clients.js";
@@ -31,10 +38,13 @@ export type NotionSdkSubset = {
 	};
 	pages: {
 		create: (args: CreatePageParameters) => Promise<unknown>;
+		retrieve: (args: GetPageParameters) => Promise<unknown>;
+		update: (args: UpdatePageParameters) => Promise<unknown>;
 	};
 	blocks: {
 		children: {
 			append: (args: AppendBlockChildrenParameters) => Promise<unknown>;
+			list: (args: ListBlockChildrenParameters) => Promise<unknown>;
 		};
 	};
 	users: {

@@ -45,8 +45,17 @@ function makeApi(opts: { pages: UserListResponse[]; throwsOnCallIndex?: number }
 			retrieve: vi.fn(async () => ({})),
 			query: vi.fn(async () => ({ results: [] })),
 		},
-		pages: { create: vi.fn(async () => ({})) },
-		blocks: { children: { append: vi.fn(async () => ({})) } },
+		pages: {
+			create: vi.fn(async () => ({})),
+			retrieve: vi.fn(async () => ({})),
+			update: vi.fn(async () => ({})),
+		},
+		blocks: {
+			children: {
+				append: vi.fn(async () => ({})),
+				list: vi.fn(async () => ({ results: [], has_more: false })),
+			},
+		},
 		users: { list: usersList },
 	};
 

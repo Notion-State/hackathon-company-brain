@@ -407,6 +407,50 @@ Transcript cues are rendered with `M:SS` (or `H:MM:SS`) timestamps. The transcri
 - **No write-back** to the source DB.
 - **Single source DB in v1.** The primary key uses bare `page.id` — a future second source DB would need a `${dbId}:` prefix to avoid collisions.
 
+### `AI Drafts` (read-only contract — owned upstream; consumed by `workers/push-to-client` dispatcher)
+
+This worker does **not** manage the AI Drafts database (`362d3984d5b8805aa856d04c39976d71`). The `dispatchDraft` tool and `onDraftStatusChange` webhook read these property names verbatim and write back two of them; schema changes upstream need to be reflected here.
+
+| Property | Type | Direction | Notes |
+|---|---|---|---|
+| `Name` | title | read | → destination page title (mapped to `File Name` for Docs, `Title` for the other two). Fallback when empty: `"Untitled draft"`. |
+| `Status` | status | read + write | Trigger when set to `Send to Both` / `Send to Client OS` / `Send to Notion State OS`. Dispatcher writes back the resulting Complete value (`In Both` / `In Client Workspace` / `In Notion State OS`) on full success; leaves unchanged on partial failure or no-op. Already-Complete values (`In Both` / `In Client Workspace` / `In Notion State OS` / `Archive`) short-circuit to no-op. |
+| `Location` | text | write | Markdown-formatted destination URLs, one per line: `Client OS: [<display name> – <docType>](<url>)` and/or `NS OS: [<display name> – <docType>](<url>)`. Written on dispatch (full or partial) — empty otherwise. |
+| `Artifact Category` | relation → Artifact Categories registry (data source `6d03178d-90aa-47cf-912a-459e1ff7983d`) | read | → `docType`. Resolver title-matches registry rows: `Doc` → `Docs`, `Status Update` → `StatusUpdate`, `Deliverable` → `Deliverable`, `Feature Requests` → rejected as `UnpushableArtifactCategory`. Empty / unrecognized → `MissingDraftRelation`. |
+| `Company` | relation → Companies | read | Required for Client OS-bound routes. First entry is looked up in the configured `COMPANY_PAGE_<ID>` → `clientId` mapping; missing mapping throws `MissingClientForCompany`. Multi-entry: uses the first with a warning. |
+| `Source Excerpt` | text | read | Feeds the Status Update `summary` default (Status Update destinations require `Summary`; the Drafts DB doesn't carry it directly). Fallback when empty: draft `Name`. |
+| (page body blocks) | — | read | Rendered to markdown via the worker's body subset (paragraphs / H1-H3 / lists / fenced code / quotes / divider; inline bold/italic/code/link). Depth-2 recursion cap, 50 KB byte cap, unsupported block types render as `_[unsupported block: <type>]_`. |
+
+#### Trigger → destination → resulting Status
+
+| Trigger Status (in-progress group) | Destinations | Resulting Status (complete group) |
+|---|---|---|
+| `Send to Both` | Client OS **and** Notion State OS | `In Both` |
+| `Send to Client OS` | Client OS only | `In Client Workspace` |
+| `Send to Notion State OS` | Notion State OS only | `In Notion State OS` |
+
+Failure mode (per the AI Drafts Trigger and Return spec): if any destination push fails, Status is left in the originating `Send to …` and the partial Location is written so the operator can see what landed. `Brain ID` dedup makes retries safe.
+
+#### Defaults applied per docType
+
+The Drafts DB does not carry the per-docType required fields the destination DBs need. The dispatcher fills them with sensible defaults on dispatch; the destination consultant edits as needed.
+
+| docType | Field | Default |
+|---|---|---|
+| Docs | `type` | `"Guide"` |
+| Docs | `status` | `"Drafting"` |
+| StatusUpdate | `date` | dispatch ISO date |
+| StatusUpdate | `summary` | `draft.Source Excerpt` or `draft.Name` |
+| StatusUpdate | `presenterEmail` | (null — Presenter skipped) |
+| StatusUpdate | `addressed` | (null — Addressed skipped) |
+| Deliverable | `status` | `"Not Started"` |
+| Deliverable | `timelineStart` | dispatch ISO date |
+| Deliverable | `timelineEnd` | (null — single-date) |
+
+#### Sync sources
+
+None. The dispatcher is triggered by either the `dispatchDraft` tool or the `onDraftStatusChange` webhook (Notion database automation outbound webhook posting to this worker's URL). No managed syncs read or write this DB.
+
 ## Adding a new database
 
 When you add a managed Notion database in a worker, append a section to this file with:

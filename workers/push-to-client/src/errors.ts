@@ -21,7 +21,11 @@ export type PushToClientErrorCode =
 	| "MARKDOWN_TOO_LONG"
 	| "INTEGRATION_REVOKED"
 	| "RATE_LIMITED"
-	| "CLIENT_API_ERROR";
+	| "CLIENT_API_ERROR"
+	| "MISSING_CLIENT_FOR_COMPANY"
+	| "UNPUSHABLE_ARTIFACT_CATEGORY"
+	| "MISSING_DRAFT_RELATION"
+	| "DRAFT_DISPATCH_FAILURE";
 
 export abstract class PushToClientError extends Error {
 	abstract readonly code: PushToClientErrorCode;
@@ -220,6 +224,92 @@ export class ClientApiError extends PushToClientError {
 		return {
 			...super.toJSON(),
 			details: { clientId: this.clientId, status: this.status },
+		};
+	}
+}
+
+export class MissingClientForCompany extends PushToClientError {
+	readonly code = "MISSING_CLIENT_FOR_COMPANY" as const;
+	readonly companyPageId: string;
+
+	constructor(companyPageId: string) {
+		super(
+			`No client configured for Company page "${companyPageId}". Add COMPANY_PAGE_<ID>=${companyPageId} to map it to one of the configured clients, then redeploy.`,
+		);
+		this.companyPageId = companyPageId;
+	}
+
+	override toJSON(): PushToClientErrorJson {
+		return { ...super.toJSON(), details: { companyPageId: this.companyPageId } };
+	}
+}
+
+export class UnpushableArtifactCategory extends PushToClientError {
+	readonly code = "UNPUSHABLE_ARTIFACT_CATEGORY" as const;
+	readonly category: string;
+
+	constructor(category: string) {
+		super(
+			`Artifact Category "${category}" is not a valid push destination. Feature Requests originate from the client workspace and are read-only on our side.`,
+		);
+		this.category = category;
+	}
+
+	override toJSON(): PushToClientErrorJson {
+		return { ...super.toJSON(), details: { category: this.category } };
+	}
+}
+
+export class MissingDraftRelation extends PushToClientError {
+	readonly code = "MISSING_DRAFT_RELATION" as const;
+	readonly field: string;
+
+	constructor(field: string, reason?: string) {
+		super(
+			`Draft is missing required relation "${field}"${reason ? `: ${reason}` : "."}`,
+		);
+		this.field = field;
+	}
+
+	override toJSON(): PushToClientErrorJson {
+		return { ...super.toJSON(), details: { field: this.field } };
+	}
+}
+
+export type DraftDispatchSide = "ClientOS" | "NSOS";
+
+export type DraftDispatchSuccess = {
+	side: DraftDispatchSide;
+	pushedPageId: string;
+	pushedPageUrl: string;
+};
+
+export type DraftDispatchFailureEntry = {
+	side: DraftDispatchSide;
+	code: string;
+	message: string;
+};
+
+export class DraftDispatchFailure extends PushToClientError {
+	readonly code = "DRAFT_DISPATCH_FAILURE" as const;
+	readonly succeeded: DraftDispatchSuccess[];
+	readonly failed: DraftDispatchFailureEntry[];
+
+	constructor(
+		succeeded: DraftDispatchSuccess[],
+		failed: DraftDispatchFailureEntry[],
+	) {
+		super(
+			`Draft dispatch had ${failed.length} failure(s) out of ${succeeded.length + failed.length} destination(s). Draft Status left unchanged so the operator can retry.`,
+		);
+		this.succeeded = succeeded;
+		this.failed = failed;
+	}
+
+	override toJSON(): PushToClientErrorJson {
+		return {
+			...super.toJSON(),
+			details: { succeeded: this.succeeded, failed: this.failed },
 		};
 	}
 }

@@ -4,12 +4,16 @@ import {
 	ClientApiError,
 	ClientNotConfigured,
 	DestinationSchemaMismatch,
+	DraftDispatchFailure,
 	IntegrationRevoked,
 	MarkdownTooLong,
+	MissingClientForCompany,
+	MissingDraftRelation,
 	MissingRequiredField,
 	ProductionPushNotAuthorized,
 	PushToClientError,
 	RateLimited,
+	UnpushableArtifactCategory,
 } from "./errors.js";
 
 describe("PushToClientError subclasses", () => {
@@ -103,5 +107,40 @@ describe("PushToClientError subclasses", () => {
 		const e = new ClientApiError("acme", 500, "boom");
 		expect(e).toBeInstanceOf(Error);
 		expect(e).toBeInstanceOf(PushToClientError);
+	});
+
+	it("MissingClientForCompany carries the company page id", () => {
+		const e = new MissingClientForCompany("page_abc");
+		expect(e.code).toBe("MISSING_CLIENT_FOR_COMPANY");
+		expect(e.message).toContain("COMPANY_PAGE_<ID>=page_abc");
+		expect(e.toJSON().details).toEqual({ companyPageId: "page_abc" });
+	});
+
+	it("UnpushableArtifactCategory carries the category name", () => {
+		const e = new UnpushableArtifactCategory("Feature Requests");
+		expect(e.code).toBe("UNPUSHABLE_ARTIFACT_CATEGORY");
+		expect(e.message).toContain("Feature Requests");
+		expect(e.toJSON().details).toEqual({ category: "Feature Requests" });
+	});
+
+	it("MissingDraftRelation carries the field name", () => {
+		const e = new MissingDraftRelation("Artifact Category", "relation is empty");
+		expect(e.code).toBe("MISSING_DRAFT_RELATION");
+		expect(e.message).toContain("Artifact Category");
+		expect(e.message).toContain("relation is empty");
+		expect(e.toJSON().details).toEqual({ field: "Artifact Category" });
+	});
+
+	it("DraftDispatchFailure carries succeeded + failed arrays", () => {
+		const e = new DraftDispatchFailure(
+			[{ side: "ClientOS", pushedPageId: "p1", pushedPageUrl: "https://n/p1" }],
+			[{ side: "NSOS", code: "INTEGRATION_REVOKED", message: "401" }],
+		);
+		expect(e.code).toBe("DRAFT_DISPATCH_FAILURE");
+		expect(e.message).toContain("1 failure(s) out of 2");
+		expect(e.toJSON().details).toMatchObject({
+			succeeded: [{ side: "ClientOS" }],
+			failed: [{ side: "NSOS", code: "INTEGRATION_REVOKED" }],
+		});
 	});
 });

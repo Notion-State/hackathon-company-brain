@@ -75,4 +75,23 @@ exec_tool "{
 }"
 set -e
 
+# Dispatcher smoke (only when DRAFT_ID is provided). Requires:
+#   - CLIENT_TOKEN_NOTIONSTATE + 3 CLIENT_*_DB_NOTIONSTATE ids configured
+#   - COMPANY_PAGE_<ID> for the staging client
+#   - DRAFTS_REGISTRY_ARTIFACT_CATEGORIES_DS set
+#   - An AI Drafts row whose Status is "Send to Both" / "Send to Client OS"
+#     / "Send to Notion State OS", with Artifact Category + Company filled in.
+if [[ -n "${DRAFT_ID:-}" ]]; then
+	echo
+	echo "=== 6) Dispatcher — dispatchDraft(DRAFT_ID) ==="
+	ntn workers exec dispatchDraft ${LOCAL_FLAG} -d "{
+		\"draftPageId\": \"${DRAFT_ID}\"
+	}"
+
+	echo "=== 7) Dispatcher idempotency — re-run (expect status=no_op) ==="
+	ntn workers exec dispatchDraft ${LOCAL_FLAG} -d "{
+		\"draftPageId\": \"${DRAFT_ID}\"
+	}"
+fi
+
 echo "Done. Inspect runs: ntn workers runs list --plain | head"
