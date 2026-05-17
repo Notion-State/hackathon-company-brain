@@ -13,6 +13,7 @@ import type { IdentityLookup, SlackIdentity } from "./lookups.js";
 import {
 	buildTitle,
 	convertSlackMrkdwn,
+	formatSlackTs,
 	recordId,
 	renderThreadMarkdown,
 	toThreadChangeProperties,
@@ -165,13 +166,24 @@ describe("renderThreadMarkdown", () => {
 		});
 		expect(md).toContain("# Hey team, what do we think about migrating to \\*Bun\\*?");
 		expect(md).toContain("**Channel:** #engineering");
+		expect(md).toContain("**Posted:** Thursday, May 16, 2024 | 6:24 PM ET");
 		expect(md).toContain("**Author:** Alice Adams (@alice)");
 		expect(md).toContain("[View in Slack](https://acme.slack.com/archives/C001/p1715898253000100)");
 		expect(md).toContain("## Thread");
-		// Each participant appears as a section header
-		expect(md).toContain("**Alice Adams (@alice) —");
-		expect(md).toContain("**Bob Brown (@bob) —");
-		expect(md).toContain("**Carol Chen (@carol) —");
+		// Each participant appears as a section header with human-readable dates
+		expect(md).toContain("**Alice Adams (@alice) — Thursday, May 16, 2024 | 6:24 PM ET**");
+		expect(md).toContain("**Bob Brown (@bob) — Thursday, May 16, 2024 | 6:26 PM ET**");
+		expect(md).toContain("**Carol Chen (@carol) — Thursday, May 16, 2024 | 6:30 PM ET**");
+	});
+
+	it("renders --- separators between messages", async () => {
+		const t = thread();
+		const md = await renderThreadMarkdown(t, channel(), {
+			identity: makeIdentity(), internalDomains: INTERNAL, permalink: null,
+		});
+		const separatorCount = (md.match(/^---$/gm) ?? []).length;
+		// One separator before each message (parent + 2 replies)
+		expect(separatorCount).toBe(3);
 	});
 
 	it("omits the view-in-slack line when permalink is null", async () => {
@@ -329,5 +341,22 @@ describe("convertSlackMrkdwn", () => {
 
 	it("converts Slack-specific emoji aliases", async () => {
 		expect(await convertSlackMrkdwn(":thumbsup: approved", idLookup)).toBe("👍 approved");
+	});
+});
+
+describe("formatSlackTs", () => {
+	it("formats epoch-seconds timestamp to human-readable ET string", () => {
+		// 1715898253 = May 16, 2024 22:24:13 UTC = 6:24 PM EDT
+		expect(formatSlackTs("1715898253.000100")).toBe("Thursday, May 16, 2024 | 6:24 PM ET");
+	});
+
+	it("handles timestamps that cross day boundaries in ET", () => {
+		// 1715000000 = May 6, 2024 12:53:20 UTC = 8:53 AM EDT
+		expect(formatSlackTs("1715000000.000000")).toBe("Monday, May 6, 2024 | 8:53 AM ET");
+	});
+
+	it("handles EST (winter) timestamps correctly", () => {
+		// 1704067200 = Jan 1, 2024 00:00:00 UTC = Dec 31, 2023 7:00 PM EST
+		expect(formatSlackTs("1704067200.000000")).toBe("Sunday, December 31, 2023 | 7:00 PM ET");
 	});
 });

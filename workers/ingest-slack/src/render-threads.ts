@@ -25,6 +25,35 @@ import type { Thread } from "./threads.js";
 const TITLE_MAX = 80;
 const RICH_TEXT_MAX = 2000;
 
+/**
+ * Format a Slack epoch-seconds timestamp as a human-readable string in
+ * America/New_York timezone: "Friday, May 16, 2025 | 2:30 PM ET"
+ */
+export function formatSlackTs(ts: string): string {
+	const ms = Math.round(Number.parseFloat(ts) * 1000);
+	const date = new Date(ms);
+
+	const weekday = new Intl.DateTimeFormat("en-US", {
+		weekday: "long",
+		timeZone: "America/New_York",
+	}).format(date);
+
+	const monthDayYear = new Intl.DateTimeFormat("en-US", {
+		month: "long",
+		day: "numeric",
+		year: "numeric",
+		timeZone: "America/New_York",
+	}).format(date);
+
+	const time = new Intl.DateTimeFormat("en-US", {
+		hour: "numeric",
+		minute: "2-digit",
+		timeZone: "America/New_York",
+	}).format(date);
+
+	return `${weekday}, ${monthDayYear} | ${time} ET`;
+}
+
 export function recordId(channelId: string, threadTs: string): string {
 	return `${channelId}:${threadTs}`;
 }
@@ -92,7 +121,7 @@ export async function renderThreadMarkdown(
 	lines.push(`# ${escapeMarkdown(title)}`);
 	lines.push("");
 	lines.push(
-		`**Channel:** #${escapeMarkdown(channel.name)}  |  **Posted:** ${slackTsToIso(parent.ts)}  |  **Replies:** ${replies.length}`,
+		`**Channel:** #${escapeMarkdown(channel.name)}  |  **Posted:** ${formatSlackTs(parent.ts)}  |  **Replies:** ${replies.length}`,
 	);
 	lines.push(`**Author:** ${escapeMarkdown(authorIdentity.displayText)}`);
 	lines.push(`**Participants:** ${participantNames.length ? escapeMarkdown(participantNames.join(", ")) : "_None_"}`);
@@ -107,7 +136,8 @@ export async function renderThreadMarkdown(
 	for (const m of [parent, ...replies]) {
 		const ident = m === parent ? authorIdentity : await opts.identity.resolveMessageAuthor(m);
 		const convertedText = await convertSlackMrkdwn(m.text, opts.identity);
-		lines.push(`**${escapeMarkdown(ident.displayText)} — ${slackTsToIso(m.ts)}**`);
+		lines.push("---");
+		lines.push(`**${escapeMarkdown(ident.displayText)} — ${formatSlackTs(m.ts)}**`);
 		lines.push(convertedText || "_(no text)_");
 		for (const f of m.files) {
 			const icon = isImageFile(f) ? "🖼️" : "📎";
