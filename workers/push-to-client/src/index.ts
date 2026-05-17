@@ -32,20 +32,19 @@ export default worker;
 
 const clients = getClients();
 
+// Notion's per-integration limit is ~3 r/s. Each client gets its own in-process
+// rate limiter (built inside `createClientApi`) so concurrent dispatches to
+// different workspaces don't share a budget. We also call `worker.pacer()` per
+// client so the deploy manifest lists the pacers — the SDK's pacer state only
+// initializes for sync caps in 0.4.0, but declaring keeps the manifest accurate
+// and future-proofs us for when tool/webhook caps get pacer support.
+const CLIENT_RATE_LIMIT = { allowedRequests: 3, intervalMs: 1000 } as const;
+
 const perClient: Record<string, ClientApi> = Object.fromEntries(
-	clients.map((cfg) => [
-		cfg.id,
-		// Notion's per-integration limit is ~3 r/s; one pacer per client so
-		// concurrent pushes to different workspaces do not share a budget.
-		createClientApi(
-			cfg,
-			worker.pacer(`clientNotion:${cfg.id}`, {
-				allowedRequests: 3,
-				intervalMs: 1000,
-			}),
-			loadUsersByEmail,
-		),
-	]),
+	clients.map((cfg) => {
+		worker.pacer(`clientNotion:${cfg.id}`, CLIENT_RATE_LIMIT);
+		return [cfg.id, createClientApi(cfg, CLIENT_RATE_LIMIT, loadUsersByEmail)];
+	}),
 );
 
 const preflight = new PreflightCache();
@@ -101,26 +100,17 @@ worker.tool("pushToClient", {
 	title: "Push to Client Workspace",
 	hints: { readOnlyHint: false },
 	description: [
-		"Push a single approved item from the Company Brain into the matching destination database in a client's external Notion workspace.",
+		"Push one approved Company Brain item into a client's external Notion workspace. Pick the destination DB by `docType`: Docs / StatusUpdate / Deliverable. Per-docType required fields are documented on each field's `.describe()`.",
 		"",
-		"Pick the destination by `docType`:",
-		"  - `Docs`         → the client's Docs DB. Requires `title`, `type`, `status`.",
-		"  - `StatusUpdate` → the client's Status Updates DB. Requires `title`, `date`, `summary`. Optional: `presenterEmail`, `addressed`.",
-		"  - `Deliverable`  → the client's Deliverables DB. Requires `title`, `status`, `timelineStart`. Optional: `timelineEnd` for a date range.",
+		"Idempotent on `(brainId, docType)`: a duplicate call returns `status=\"already_pushed\"`. Pages are read-only after creation — no update flow.",
 		"",
-		"Call this exactly once per approved item after a human has approved it. The push is idempotent on `brainId`: a second call with the same `brainId` for the same `docType` returns `status=\"already_pushed\"` without creating a duplicate.",
-		"",
-		"Pages are read-only from this worker's perspective after creation — there is no update flow.",
-		"",
-		"Failure modes you must not auto-retry:",
-		"1) MissingRequiredField — surface to the human; payload was incomplete for the chosen docType.",
-		"2) ProductionPushNotAuthorized — surface to the human; require explicit confirmation before retrying with allowProduction=true.",
-		"3) DestinationSchemaMismatch — surface details to the human so the client can fix their destination database (and/or canonical Status/Type options).",
+		"Failure modes you must NOT auto-retry; surface to the human:",
+		"- MissingRequiredField — payload incomplete for this docType.",
+		"- ProductionPushNotAuthorized — client is in production mode; require explicit `allowProduction=true` and human confirmation.",
+		"- DestinationSchemaMismatch — destination DB missing properties or has unknown Status/Type values.",
 		"Other errors (RateLimited, IntegrationRevoked, ClientApiError) are operational; report them.",
 		"",
-		"Relations (`Project` on Docs, `Event` on Status Updates) are not set by this tool — they require destination-side page ids the agent doesn't have. The client fills them in manually.",
-		"",
-		"`presenterEmail` is best-effort: we resolve the email against the destination workspace's users via `users.list`. If no match, the push still succeeds and a warning is included in the result.",
+		"Relations (`Project` on Docs, `Event` on Status Updates) are NOT set — the client links them manually. `presenterEmail` is best-effort resolved via `users.list`; unmatched emails are skipped with a warning.",
 	].join("\n"),
 	schema: j.object({
 		clientId: j
@@ -247,23 +237,17 @@ worker.tool("dispatchDraft", {
 	title: "Dispatch AI Draft",
 	hints: { readOnlyHint: false },
 	description: [
-		"Read a row in the AI Drafts database, route it to its matching destination(s) based on Status, and write back Status + Location.",
+		"Read an AI Drafts row, route it by Status, write back Status + Location.",
 		"",
-		"Routing (driven by the draft's current Status):",
-		"  - `Send to Both`            → Client OS + Notion State OS → Status becomes `In Both`.",
-		"  - `Send to Client OS`       → Client OS only              → Status becomes `In Client Workspace`.",
-		"  - `Send to Notion State OS` → Notion State OS only         → Status becomes `In Notion State OS`.",
+		"Routing:",
+		"- `Send to Both` → Client OS + Notion State OS → `In Both`.",
+		"- `Send to Client OS` → Client OS only → `In Client Workspace`.",
+		"- `Send to Notion State OS` → Notion State OS only → `In Notion State OS`.",
+		"Already-complete drafts (`In Both` / `In Client Workspace` / `In Notion State OS` / `Archive`) are an idempotent no-op.",
 		"",
-		"Already-complete drafts (Status ∈ `In Both` / `In Client Workspace` / `In Notion State OS` / `Archive`) are an idempotent no-op.",
+		"Reads `Artifact Category` → `docType` (Feature Requests rejected) and, for Client OS routes, `Company` → COMPANY_PAGE_<ID>. Per-docType required fields not on the draft get sensible defaults (Type=Guide, Status=Drafting, Date=today, etc.) the destination consultant edits.",
 		"",
-		"The dispatcher reads the draft's `Artifact Category` relation to pick `docType` (Doc → Docs, Status Update → StatusUpdate, Deliverable → Deliverable; Feature Requests is rejected as unpushable). For Client OS routes it reads the draft's `Company` relation and looks it up in the configured COMPANY_PAGE_<ID> mapping.",
-		"",
-		"Per-docType required destination fields not carried by the Drafts row are filled with sensible defaults (e.g., Docs Type=Guide, Status=Drafting; Status Update Date=today, Summary=Source Excerpt; Deliverable Status=Not Started, Timeline=today). The destination consultant edits as needed.",
-		"",
-		"Failure modes:",
-		"1) UnpushableArtifactCategory — Feature Requests can't be pushed (they originate from the client and are read-only on our side).",
-		"2) MissingClientForCompany / MissingDraftRelation — fix the draft (or the COMPANY_PAGE_<ID> env) and retry.",
-		"3) DraftDispatchFailure — at least one destination push failed. Status is left in the originating Send to … so the operator can retry; the successful side(s) are recorded in Location. Brain ID dedup ensures the retry is safe.",
+		"Failure modes: UnpushableArtifactCategory (Feature Requests); MissingClientForCompany / MissingDraftRelation (fix the draft or env); DraftDispatchFailure (one side failed — Status stays in originating Send to …; Brain ID dedup makes retry safe).",
 	].join("\n"),
 	schema: j.object({
 		draftPageId: j
