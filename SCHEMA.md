@@ -68,7 +68,7 @@ Every property is emitted on every change record (the SDK's strict mapped type r
 
 #### Source-side canonical schema (what each client's Feature Requests DB must contain)
 
-Mirrored from the project schema reference at `https://www.notion.so/d931147211b445d9b62b0fd66cf5ff2b` filtered to `Source Database = Feature Requests`. Required properties must exist by name on each client's database; missing properties don't crash the sync but produce sparse rows downstream.
+Mirrored from the project schema reference at `https://www.notion.so/<transformation-hub-db-id>` filtered to `Source Database = Feature Requests`. Required properties must exist by name on each client's database; missing properties don't crash the sync but produce sparse rows downstream.
 
 | Property name (source) | Type | Required | Notes |
 |---|---|---|---|
@@ -152,7 +152,7 @@ See `workers/ingest-client-notion/README.md` for the five-step onboarding runboo
 
 ### Transformation Hub destinations (client-managed; **contracts**, not managed databases)
 
-`workers/push-to-client` writes into three destination databases per client, each conforming to the canonical **Transformation Hub** schema (https://www.notion.so/d931147211b445d9b62b0fd66cf5ff2b). **We do not manage these databases** — the client clones each from the canonical template into their own workspace and shares it with the integration we configure on the worker.
+`workers/push-to-client` writes into three destination databases per client, each conforming to the canonical **Transformation Hub** schema (https://www.notion.so/<transformation-hub-db-id>). **We do not manage these databases** — the client clones each from the canonical template into their own workspace and shares it with the integration we configure on the worker.
 
 Every destination database has a single augmentation we publish on top of the canonical schema:
 
@@ -324,7 +324,7 @@ The converted message text is **not** subsequently markdown-escaped — escaping
 
 ### `Loom Videos` (managed by `workers/ingest-loom`)
 
-Holds one row per source-DB page that contains a Loom URL. Primary key is `Source Page ID = page.id` (the bare Notion page id from the source database `c148c2e3aa554651bd9ca44b1de751d0`). One source row → one target row; if the source row's `Video URL` value changes, the same target row updates in place. This preserves a 1:1 mapping with the source DB and means private/unavailable videos still get rows (with `Sync Status` set accordingly) so downstream agents can see what was attempted.
+Holds one row per source-DB page that contains a Loom URL. Primary key is `Source Page ID = page.id` (the bare Notion page id from the source database `<loom-source-db-id>`). One source row → one target row; if the source row's `Video URL` value changes, the same target row updates in place. This preserves a 1:1 mapping with the source DB and means private/unavailable videos still get rows (with `Sync Status` set accordingly) so downstream agents can see what was attempted.
 
 The Loom platform has **no general-purpose REST API**; the worker composes four independent public enrichment surfaces, each behind its own pacer, each catching failures:
 
@@ -410,14 +410,14 @@ Transcript cues are rendered with `M:SS` (or `H:MM:SS`) timestamps. The transcri
 
 ### `AI Drafts` (read-only contract — owned upstream; consumed by `workers/push-to-client` dispatcher)
 
-This worker does **not** manage the AI Drafts database (`362d3984d5b8805aa856d04c39976d71`). The `dispatchDraft` tool and `onDraftStatusChange` webhook read these property names verbatim and write back two of them; schema changes upstream need to be reflected here.
+This worker does **not** manage the AI Drafts database (`<ai-drafts-db-id>`). The `dispatchDraft` tool and `onDraftStatusChange` webhook read these property names verbatim and write back two of them; schema changes upstream need to be reflected here.
 
 | Property | Type | Direction | Notes |
 |---|---|---|---|
 | `Name` | title | read | → destination page title (mapped to `File Name` for Docs, `Title` for the other two). Fallback when empty: `"Untitled draft"`. |
 | `Status` | status | read + write | Trigger when set to `Send to Both` / `Send to Client OS` / `Send to Notion State OS`. Dispatcher writes back the resulting Complete value (`In Both` / `In Client Workspace` / `In Notion State OS`) on full success; leaves unchanged on partial failure or no-op. Already-Complete values (`In Both` / `In Client Workspace` / `In Notion State OS` / `Archive`) short-circuit to no-op. |
 | `Location` | text | write | Markdown-formatted destination URLs, one per line: `Client OS: [<display name> – <docType>](<url>)` and/or `NS OS: [<display name> – <docType>](<url>)`. Written on dispatch (full or partial) — empty otherwise. |
-| `Artifact Category` | relation → Artifact Categories registry (data source `6d03178d-90aa-47cf-912a-459e1ff7983d`) | read | → `docType`. Resolver title-matches registry rows: `Doc` → `Docs`, `Status Update` → `StatusUpdate`, `Deliverable` → `Deliverable`, `Feature Requests` → rejected as `UnpushableArtifactCategory`. Empty / unrecognized → `MissingDraftRelation`. |
+| `Artifact Category` | relation → Artifact Categories registry (data source `<artifact-categories-ds-id>`) | read | → `docType`. Resolver title-matches registry rows: `Doc` → `Docs`, `Status Update` → `StatusUpdate`, `Deliverable` → `Deliverable`, `Feature Requests` → rejected as `UnpushableArtifactCategory`. Empty / unrecognized → `MissingDraftRelation`. |
 | `Company` | relation → Companies | read | Required for Client OS-bound routes. First entry is looked up in the configured `COMPANY_PAGE_<ID>` → `clientId` mapping; missing mapping throws `MissingClientForCompany`. Multi-entry: uses the first with a warning. |
 | `Source Excerpt` | text | read | Feeds the Status Update `summary` default (Status Update destinations require `Summary`; the Drafts DB doesn't carry it directly). Fallback when empty: draft `Name`. |
 | `DRI` | people | read | Designated owner. Feeds the Deliverable `ownerEmail` payload: first DRI's Notion user id is resolved to an email via home `users.retrieve`, then re-resolved per destination workspace. Empty / unresolvable → empty `Owner` + warning (matches Presenter semantics). Multi-entry: uses the first with a `dispatch-draft: multiple DRI users` warning. |

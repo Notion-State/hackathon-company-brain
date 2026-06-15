@@ -2,7 +2,7 @@
 
 Notion Worker that pushes approved, categorized "Company Brain" items into the matching destination database in a client's external Notion workspace. Holds the most sensitive credential in the project (the per-client internal-integration tokens) per [CLAUDE.md](../../CLAUDE.md).
 
-Destination databases follow the canonical **Transformation Hub** schema (https://www.notion.so/d931147211b445d9b62b0fd66cf5ff2b). Three doc types are supported — `Docs`, `Status Updates`, `Deliverables` — each writing into its own destination database in the client's workspace.
+Destination databases follow the canonical **Transformation Hub** schema (https://www.notion.so/<transformation-hub-db-id>). Three doc types are supported — `Docs`, `Status Updates`, `Deliverables` — each writing into its own destination database in the client's workspace.
 
 ## What it exposes
 
@@ -43,7 +43,7 @@ Worker-level config for the dispatcher:
 
 | Var | Required? | Default | Description |
 |---|---|---|---|
-| `DRAFTS_REGISTRY_ARTIFACT_CATEGORIES_DS` | yes for `dispatchDraft` | — | Data source id of the Artifact Categories registry inside our workspace. Today: `6d03178d-90aa-47cf-912a-459e1ff7983d`. |
+| `DRAFTS_REGISTRY_ARTIFACT_CATEGORIES_DS` | yes for `dispatchDraft` | — | Data source id of the Artifact Categories registry inside our workspace. Use the data source id from the registry's Notion URL. |
 
 All three destination DB ids are required per client. Partial config throws at module-init. The dispatcher's deps are constructed lazily — installations that haven't onboarded `notionstate` yet can still use the `pushToClient` tool.
 
@@ -112,7 +112,7 @@ ntn workers exec pushToClient --local -d '{
   "title": "[Verify] Status Update @Next Monday",
   "date": "2026-05-18",
   "summary": "Hello world.",
-  "presenterEmail": "you@notionstate.com"
+  "presenterEmail": "you@example.com"
 }'
 
 # Smoke create a Deliverable
@@ -157,7 +157,7 @@ See `test.sh` for the full smoke script.
 
 ## AI Drafts dispatcher
 
-The `dispatchDraft` tool and `onDraftStatusChange` webhook implement the [AI Drafts Trigger and Return spec](https://www.notion.so/notionstate/AI-Drafts-Trigger-and-Return-362d3984d5b880cdb14ef2e2418685bf). Flow:
+The `dispatchDraft` tool and `onDraftStatusChange` webhook implement the [AI Drafts Trigger and Return spec](https://www.notion.so/notionstate/AI-Drafts-Trigger-and-Return-<ai-drafts-spec-page-id>). Flow:
 
 1. A consultant flips an AI Drafts row's `Status` to one of `Send to Both`, `Send to Client OS`, or `Send to Notion State OS`.
 2. A Notion database automation on the AI Drafts DB posts to this worker's `onDraftStatusChange` webhook with at least `{ "pageId": "<draft page id>" }`.
@@ -227,7 +227,7 @@ The page body is rendered to a markdown subset (paragraphs / H1-H3 / lists / fen
 
 A client follows these once to come online:
 
-1. **Duplicate the three Transformation Hub destination databases** into their workspace from the canonical schema reference (https://www.notion.so/d931147211b445d9b62b0fd66cf5ff2b). One for each of `Docs`, `Status Updates`, `Deliverables`.
+1. **Duplicate the three Transformation Hub destination databases** into their workspace from the canonical schema reference (https://www.notion.so/<transformation-hub-db-id>). One for each of `Docs`, `Status Updates`, `Deliverables`.
 2. **Add a `Brain ID` rich_text property** to each of the three databases. (Our idempotency key — the rest of the schema is canonical.)
 3. Go to Notion → Settings → Integrations → **Develop your own integrations** → "New internal integration" (or visit https://www.notion.so/profile/integrations/internal). Name it e.g. `Company Brain – <client>`; pick their workspace; grant **Read / Update / Insert content** and **Read user information including email addresses** capabilities. Copy the `ntn_...` token.
 4. For each of the three databases, open it → `...` menu → **Connections** → enable the integration.

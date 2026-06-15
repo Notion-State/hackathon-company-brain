@@ -17,7 +17,7 @@ export const GRAPHQL_OK = {
 			name: "Product walkthrough",
 			description: "Quick demo of the new dashboard.\n\nFollow-up Q&A pinned in comments.",
 			commentCount: 3,
-			owner: { display_name: "Alex Lee", email: "alex@notionstate.com" },
+			owner: { display_name: "Alex Lee", email: "alex@example.com" },
 		},
 		fetchVideoTranscript: {
 			__typename: "VideoTranscriptDetails",

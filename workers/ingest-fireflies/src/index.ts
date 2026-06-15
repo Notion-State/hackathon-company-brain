@@ -33,11 +33,13 @@ const BACKFILL_DAYS = clampInt(process.env.FIREFLIES_BACKFILL_DAYS, { fallback: 
  */
 const CONSISTENCY_BUFFER_MS = 60 * 60 * 1000;
 
-// Project-specific constants. Hardcoded rather than env-driven because they
-// don't change across environments and we don't want a deploy-time misconfig
-// to silently disable Internal/External classification or the Companies lookup.
+// The internal email-domain list is our own org domain, not a per-environment
+// value; pinning it keeps a deploy-time misconfig from silently disabling the
+// Internal/External classification.
 const INTERNAL_DOMAINS = parseInternalDomains("notionstate.com");
-const COMPANIES_DATABASE_ID = "89e2a2f0-e4e9-437a-991b-4b551e9c26a6";
+// The Companies DB id is tenant-specific, so it's read from the environment
+// (required: module-init throws if unset) rather than baked into source.
+const COMPANIES_DATABASE_ID = required("COMPANIES_DATABASE_ID");
 
 // ---- Module-init: accounts → pacers + clients ----
 
@@ -208,4 +210,14 @@ function toUpsertChange(t: Transcript, accountId: string, companies: CompaniesLo
 		properties: toChangeProperties(t, accountId, INTERNAL_DOMAINS, companies),
 		pageContentMarkdown: renderTranscriptMarkdown(t),
 	};
+}
+
+function required(name: string): string {
+	const v = process.env[name];
+	if (!v) {
+		throw new Error(
+			`${name} is required. Set via \`ntn workers env set ${name}=...\` (deployed) or in .env (local).`,
+		);
+	}
+	return v;
 }

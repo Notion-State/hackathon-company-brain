@@ -11,11 +11,11 @@ describe("getCompanyMapping", () => {
 
 	it("parses one entry per client and lowercases the id", () => {
 		const m = getCompanyMapping({
-			COMPANY_PAGE_ACME: "362d3984-d5b8-8000-0000-000000000001",
+			COMPANY_PAGE_ACME: "a1b2c3d4-e5f6-8000-0000-000000000001",
 		});
 		expect(m.entries()).toEqual([
 			{
-				companyPageId: "362d3984d5b880000000000000000001",
+				companyPageId: "a1b2c3d4e5f680000000000000000001",
 				clientId: "acme",
 			},
 		]);
@@ -23,11 +23,11 @@ describe("getCompanyMapping", () => {
 
 	it("returns clientId for either dashed or undashed lookup", () => {
 		const m = getCompanyMapping({
-			COMPANY_PAGE_ACME: "362d3984-d5b8-8000-0000-000000000001",
+			COMPANY_PAGE_ACME: "a1b2c3d4-e5f6-8000-0000-000000000001",
 		});
-		expect(m.get("362d3984-d5b8-8000-0000-000000000001")).toBe("acme");
-		expect(m.get("362d3984d5b880000000000000000001")).toBe("acme");
-		expect(m.get("362D3984D5B880000000000000000001")).toBe("acme");
+		expect(m.get("a1b2c3d4-e5f6-8000-0000-000000000001")).toBe("acme");
+		expect(m.get("a1b2c3d4e5f680000000000000000001")).toBe("acme");
+		expect(m.get("A1B2C3D4E5F680000000000000000001")).toBe("acme");
 	});
 
 	it("supports multiple clients, deterministically sorted by entries()", () => {
@@ -40,9 +40,9 @@ describe("getCompanyMapping", () => {
 
 	it("trims surrounding whitespace from the env value", () => {
 		const m = getCompanyMapping({
-			COMPANY_PAGE_ACME: "  362d3984-d5b8-8000-0000-000000000001  ",
+			COMPANY_PAGE_ACME: "  a1b2c3d4-e5f6-8000-0000-000000000001  ",
 		});
-		expect(m.get("362d3984-d5b8-8000-0000-000000000001")).toBe("acme");
+		expect(m.get("a1b2c3d4-e5f6-8000-0000-000000000001")).toBe("acme");
 	});
 
 	it("ignores empty-string values (treats as unset)", () => {

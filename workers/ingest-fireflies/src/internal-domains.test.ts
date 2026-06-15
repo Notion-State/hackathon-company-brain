@@ -9,8 +9,8 @@ describe("parseInternalDomains", () => {
 	});
 
 	it("parses a comma-separated list, trimming and lowercasing", () => {
-		const set = parseInternalDomains(" NotionState.com , Acme.com ");
-		expect(set.has("notionstate.com")).toBe(true);
+		const set = parseInternalDomains(" Example.com , Acme.com ");
+		expect(set.has("example.com")).toBe(true);
 		expect(set.has("acme.com")).toBe(true);
 		expect(set.size).toBe(2);
 	});
@@ -46,7 +46,7 @@ describe("extractDomain", () => {
 });
 
 describe("isInternal", () => {
-	const internal = parseInternalDomains("notionstate.com,acme.com");
+	const internal = parseInternalDomains("example.com,acme.com");
 
 	it("returns false for missing email", () => {
 		expect(isInternal(null, internal)).toBe(false);
@@ -54,12 +54,12 @@ describe("isInternal", () => {
 	});
 
 	it("returns true when the domain matches", () => {
-		expect(isInternal("leslie@notionstate.com", internal)).toBe(true);
+		expect(isInternal("leslie@example.com", internal)).toBe(true);
 		expect(isInternal("alice@acme.com", internal)).toBe(true);
 	});
 
 	it("returns false for external domains", () => {
-		expect(isInternal("ext@example.com", internal)).toBe(false);
+		expect(isInternal("ext@partner.com", internal)).toBe(false);
 	});
 
 	it("returns false when internal set is empty", () => {

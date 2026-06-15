@@ -152,7 +152,7 @@ describe("normalizeGraphqlResponse", () => {
 		if (r.status !== "ok") throw new Error("expected ok");
 		expect(r.videoVariant).toBe("RegularUserVideo");
 		expect(r.ownerName).toBe("Alex Lee");
-		expect(r.ownerEmail).toBe("alex@notionstate.com");
+		expect(r.ownerEmail).toBe("alex@example.com");
 		expect(r.createdAt).toBe("2026-04-12T15:30:00.000Z");
 		expect(r.commentCount).toBe(3);
 		expect(r.description).toContain("Follow-up Q&A");

@@ -23,7 +23,7 @@ Loom has **no general-purpose REST API** at any tier (Enterprise gates SCIM only
 | Var | Required? | Default | Description |
 |---|---|---|---|
 | `NOTION_API_TOKEN` | yes | — | Internal-integration token used to read the source DB. Create at https://www.notion.so/profile/integrations/internal, then share the source DB with the integration. |
-| `LOOM_SOURCE_DATABASE_ID` | yes | `c148c2e3aa554651bd9ca44b1de751d0` | Notion database id whose rows hold the Loom URLs. The provided default targets the production source DB this worker was built for. |
+| `LOOM_SOURCE_DATABASE_ID` | yes | — | Notion database id whose rows hold the Loom URLs. Required — the worker throws at startup if unset. Use the id (with or without dashes) from the source DB's Notion URL. |
 | `LOOM_SOURCE_URL_PROPERTY` | no | `Video URL` | Name of the URL property on each source row that holds the Loom share link. Override if pointing at a clone with a different column name. |
 | `LOOM_ENABLE_GRAPHQL` | no | `true` | Kill switch for the undocumented public GraphQL endpoint (owner info, comment count, and the signed transcript URL — without GraphQL we can't fetch transcripts either). Set to `false` if Loom changes their schema — Core metadata (oEmbed + share-page scrape) still populates. |
 
@@ -34,7 +34,7 @@ See `.env.example`.
 1. Create an internal integration at https://www.notion.so/profile/integrations/internal.
 2. Ensure it has **Read content** capability. (Write content is not needed — this worker only reads the source DB; writes go to the managed `Loom Videos` DB through the sync mechanism, which has its own permissions.)
 3. Copy the integration token (`ntn_…`).
-4. In Notion, open the source database (`c148c2e3aa554651bd9ca44b1de751d0`), click `…` → `Connections` → add the integration.
+4. In Notion, open the source database (the one whose id you set as `LOOM_SOURCE_DATABASE_ID`), click `…` → `Connections` → add the integration.
 5. `ntn workers env set NOTION_API_TOKEN=ntn_...` (or write to `.env` locally).
 
 ## Local development
@@ -55,7 +55,7 @@ npm run test:watch   # iterative
 ```bash
 ntn workers deploy --name ingest-loom         # first time
 ntn workers env set NOTION_API_TOKEN=ntn_...
-ntn workers env set LOOM_SOURCE_DATABASE_ID=c148c2e3aa554651bd9ca44b1de751d0
+ntn workers env set LOOM_SOURCE_DATABASE_ID=<source-db-id>
 # optional:
 ntn workers env set LOOM_SOURCE_URL_PROPERTY="Video URL"
 ntn workers env set LOOM_ENABLE_GRAPHQL=true

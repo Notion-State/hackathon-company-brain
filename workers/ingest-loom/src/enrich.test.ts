@@ -45,7 +45,7 @@ const SCRAPE_OK: SharePageResult = {
 const GRAPHQL_OK: GraphQLResult = {
 	status: "ok",
 	ownerName: "Alex Lee",
-	ownerEmail: "alex@notionstate.com",
+	ownerEmail: "alex@example.com",
 	createdAt: "2026-04-12T15:30:00.000Z",
 	commentCount: 3,
 	description: "Quick demo of the new dashboard.\n\nFollow-up Q&A pinned in comments.",

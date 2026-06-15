@@ -7,7 +7,7 @@
  * don't each re-encode the canonical schema.
  *
  * Schemas mirror the Transformation Hub canonical reference:
- *   https://www.notion.so/d931147211b445d9b62b0fd66cf5ff2b
+ *   https://www.notion.so/<transformation-hub-db-id>
  * filtered to `Source Database = Docs`, `Status Updates`, `Deliverables`.
  *
  * `Brain ID` (rich_text) is augmented onto every destination by us — it's our

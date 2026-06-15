@@ -18,9 +18,10 @@ Both write to the same database (`Meeting Transcripts`). Primary key is composit
 | `FIREFLIES_API_KEY` | yes (or a `FIREFLIES_API_KEY_<ID>` variant) | — | Default account's API key. Get it from [Fireflies → Integrations → Custom Fireflies](https://app.fireflies.ai/integrations/custom/fireflies). |
 | `FIREFLIES_BACKFILL_DAYS` | no | `30` | How far back the backfill (and first-run delta cursor) reaches. Clamped to [1, 3650]. |
 | `NOTION_API_TOKEN` | required for `Companies` column | — | Internal-integration token. Create at [Notion integrations](https://www.notion.so/profile/integrations/internal); grant access to the Meeting Transcripts DB *and* the Companies DB. Without it, the `Companies` column stays empty but the sync still runs. (Sync capabilities are not pre-authenticated by the workers platform; only tool capabilities invoked by Custom Agents get an automatic token.) |
+| `COMPANIES_DATABASE_ID` | yes | — | Notion database id of the Companies DB (attendee email domain → company name; drives the `Companies` column). Read from env and **required** — the worker throws at startup if unset. `NOTION_API_TOKEN` must also grant access to this DB for the column to populate. Use the id (with or without dashes) from the DB's URL. |
 | `FIREFLIES_API_KEY_<ID>` | no | — | Additional Fireflies accounts. The `<ID>` becomes the account id (lowercased). Example: `FIREFLIES_API_KEY_ACME` → account id `acme`. |
 
-`INTERNAL_DOMAINS` (`notionstate.com`) and the Companies database id are hardcoded in `src/index.ts` — they aren't expected to change and locking them in keeps a deploy-time misconfig from silently disabling the Internal/External classification or the Companies lookup.
+The internal-domain list (`INTERNAL_DOMAINS`, our own `notionstate.com`) is hardcoded in `src/index.ts` — it's our org domain rather than a per-environment value, and pinning it keeps a deploy-time misconfig from silently disabling the Internal/External classification. The tenant-specific Companies database id is **not** hardcoded; it's read from `COMPANIES_DATABASE_ID` (see the table above).
 
 See `.env.example`.
 

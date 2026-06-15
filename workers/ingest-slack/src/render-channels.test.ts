@@ -5,7 +5,7 @@ import { classifyChannelType, renderChannelMarkdown, toChannelChangeProperties }
 import type { SlackChannel } from "./slack.js";
 
 const NOW = new Date("2026-05-15T12:00:00.000Z");
-const INTERNAL = parseInternalDomains("notionstate.com");
+const INTERNAL = parseInternalDomains("example.com");
 
 function channel(overrides: Partial<SlackChannel> = {}): SlackChannel {
 	return {
@@ -36,13 +36,13 @@ function makeIdentity(map: Record<string, SlackIdentity>): IdentityLookup {
 describe("toChannelChangeProperties", () => {
 	it("emits all properties with correct shapes and escaped text", async () => {
 		const identity = makeIdentity({
-			U_ALICE: { displayText: "Alice Adams (@alice)", email: "alice@notionstate.com", isBot: false },
+			U_ALICE: { displayText: "Alice Adams (@alice)", email: "alice@example.com", isBot: false },
 		});
 		const props = await toChannelChangeProperties(channel(), {
 			identity,
 			internalDomains: INTERNAL,
 			teamDomain: "acme",
-			memberEmails: "alice@notionstate.com, bob@partner.com",
+			memberEmails: "alice@example.com, bob@partner.com",
 		}, NOW);
 
 		expect(props).toMatchObject({
@@ -69,14 +69,14 @@ describe("toChannelChangeProperties", () => {
 
 	it("populates Internal Creator only when creator email matches an internal domain", async () => {
 		const ident = makeIdentity({
-			U_ALICE: { displayText: "Alice (@alice)", email: "alice@notionstate.com", isBot: false },
+			U_ALICE: { displayText: "Alice (@alice)", email: "alice@example.com", isBot: false },
 			U_EXT: { displayText: "Ext (@ext)", email: "ext@partner.com", isBot: false },
 		});
 		const internal = await toChannelChangeProperties(channel({ creator: "U_ALICE" }), {
 			identity: ident, internalDomains: INTERNAL, teamDomain: "acme", memberEmails: "",
 		}, NOW);
 		// Internal Creator should be populated (people value with one email)
-		expect(JSON.stringify(internal["Internal Creator"])).toContain("alice@notionstate.com");
+		expect(JSON.stringify(internal["Internal Creator"])).toContain("alice@example.com");
 
 		const external = await toChannelChangeProperties(channel({ creator: "U_EXT" }), {
 			identity: ident, internalDomains: INTERNAL, teamDomain: "acme", memberEmails: "",
@@ -120,10 +120,10 @@ describe("toChannelChangeProperties", () => {
 describe("renderChannelMarkdown", () => {
 	it("produces a body with creator display name, topic, purpose, and slack URL", async () => {
 		const identity = makeIdentity({
-			U_ALICE: { displayText: "Alice Adams (@alice)", email: "alice@notionstate.com", isBot: false },
+			U_ALICE: { displayText: "Alice Adams (@alice)", email: "alice@example.com", isBot: false },
 		});
 		const md = await renderChannelMarkdown(channel(), {
-			identity, internalDomains: INTERNAL, teamDomain: "acme", memberEmails: "alice@notionstate.com",
+			identity, internalDomains: INTERNAL, teamDomain: "acme", memberEmails: "alice@example.com",
 		});
 		expect(md).toContain("# \\#engineering");
 		expect(md).toContain("**Members:** 42");
@@ -137,7 +137,7 @@ describe("renderChannelMarkdown", () => {
 	it("renders empty topic/purpose as placeholders", async () => {
 		const identity = makeIdentity({ U_ALICE: { displayText: "Alice", email: null, isBot: false } });
 		const md = await renderChannelMarkdown(channel({ topic: "", purpose: "" }), {
-			identity, internalDomains: INTERNAL, teamDomain: "acme", memberEmails: "alice@notionstate.com",
+			identity, internalDomains: INTERNAL, teamDomain: "acme", memberEmails: "alice@example.com",
 		});
 		expect(md).toContain("_No topic set._");
 		expect(md).toContain("_No purpose set._");
@@ -146,7 +146,7 @@ describe("renderChannelMarkdown", () => {
 	it("uses (unknown) for the creator when channel has no creator field", async () => {
 		const identity = makeIdentity({});
 		const md = await renderChannelMarkdown(channel({ creator: null }), {
-			identity, internalDomains: INTERNAL, teamDomain: "acme", memberEmails: "alice@notionstate.com",
+			identity, internalDomains: INTERNAL, teamDomain: "acme", memberEmails: "alice@example.com",
 		});
 		expect(md).toContain("**Created by:** (unknown)");
 	});

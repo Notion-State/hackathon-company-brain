@@ -300,7 +300,7 @@ describe("createSlackClient", () => {
 					name: "alice",
 					real_name: "Alice Adams",
 					is_bot: false,
-					profile: { display_name: "alice", email: "alice@notionstate.com", real_name: "Alice Adams" },
+					profile: { display_name: "alice", email: "alice@example.com", real_name: "Alice Adams" },
 				},
 			});
 			const u = await createSlackClient("t", pacer, { web }).usersInfo("U001");
@@ -308,7 +308,7 @@ describe("createSlackClient", () => {
 				id: "U001",
 				real_name: "Alice Adams",
 				display_name: "alice",
-				email: "alice@notionstate.com",
+				email: "alice@example.com",
 				is_bot: false,
 			});
 		});

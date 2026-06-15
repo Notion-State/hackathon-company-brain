@@ -22,7 +22,7 @@ import type { SlackChannel } from "./slack.js";
 import type { Thread } from "./threads.js";
 
 const NOW = new Date("2026-05-15T12:00:00.000Z");
-const INTERNAL = parseInternalDomains("notionstate.com");
+const INTERNAL = parseInternalDomains("example.com");
 
 function channel(overrides: Partial<SlackChannel> = {}): SlackChannel {
 	return {
@@ -43,8 +43,8 @@ function channel(overrides: Partial<SlackChannel> = {}): SlackChannel {
 }
 
 const IDENTITY_MAP: Record<string, SlackIdentity> = {
-	U_ALICE: { displayText: "Alice Adams (@alice)", email: "alice@notionstate.com", isBot: false },
-	U_BOB: { displayText: "Bob Brown (@bob)", email: "bob@notionstate.com", isBot: false },
+	U_ALICE: { displayText: "Alice Adams (@alice)", email: "alice@example.com", isBot: false },
+	U_BOB: { displayText: "Bob Brown (@bob)", email: "bob@example.com", isBot: false },
 	U_CAROL: { displayText: "Carol Chen (@carol)", email: "carol@partner.com", isBot: false },
 	U_DAVE: { displayText: "Dave Doe (@dave)", email: null, isBot: false },
 };
@@ -127,13 +127,13 @@ describe("toThreadChangeProperties", () => {
 	});
 
 	it("Internal Participants collects unique internal-domain emails across parent + replies", async () => {
-		// Alice + Bob are internal (notionstate.com); Carol is external (partner.com).
+		// Alice + Bob are internal (example.com); Carol is external (partner.com).
 		const props = await toThreadChangeProperties(thread(), channel(), {
 			identity: makeIdentity(), internalDomains: INTERNAL, permalink: null,
 		}, NOW);
 		const serialized = JSON.stringify(props["Internal Participants"]);
-		expect(serialized).toContain("alice@notionstate.com");
-		expect(serialized).toContain("bob@notionstate.com");
+		expect(serialized).toContain("alice@example.com");
+		expect(serialized).toContain("bob@example.com");
 		expect(serialized).not.toContain("carol@partner.com");
 	});
 

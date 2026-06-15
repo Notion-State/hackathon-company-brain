@@ -21,7 +21,7 @@ const aliceUser = {
 	id: "U001",
 	real_name: "Alice Adams",
 	display_name: "alice",
-	email: "alice@notionstate.com",
+	email: "alice@example.com",
 	is_bot: false,
 } as const;
 
@@ -36,7 +36,7 @@ describe("createIdentityLookup", () => {
 			const out = await createIdentityLookup(client).resolveUser("U001");
 			expect(out).toEqual({
 				displayText: "Alice Adams (@alice)",
-				email: "alice@notionstate.com",
+				email: "alice@example.com",
 				isBot: false,
 			});
 		});
